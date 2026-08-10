@@ -1,4 +1,6 @@
 ## EndStone ARC AI Helper
+[![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+
 
 一个为 Endstone 服务器提供 **AI 聊天助手** 功能的插件。支持：
 
