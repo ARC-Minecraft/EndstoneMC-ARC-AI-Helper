@@ -27,32 +27,28 @@ DEFAULT_PERSONA = (
 )
 
 DEFAULT_SYSTEM_PROMPT = (
-    "你运行在 Minecraft 服务器中，所有回复都会直接显示在游戏聊天栏。"
+    "你运行在 Minecraft 基岩版服务器中，所有回复都会直接显示在游戏聊天栏。"
     "请使用 Minecraft 的颜色代码和格式代码来美化消息，而不要使用 Markdown 或其他标记语言。"
     "常用颜色代码示例: §0黑色, §1深蓝, §2深绿, §3深青, §4深红, §5深紫, §6金色, §7灰色, "
     "§8深灰, §9蓝色, §a绿色, §b青色, §c红色, §d淡紫, §e黄色, §f白色。"
     "常用格式代码示例: §l粗体, §n下划线, §o斜体, §k随机字符, §m删除线, §r重置格式。"
-    "你可以在需要时通过在回复中加入形如 [execution_command:实际游戏指令] 的标记，让服务器帮你执行指令，"
-    "例如: [execution_command:effect DEVILENMO night_vision 1 10]。"
-    "你被允许使用 /effect <player> <effect> [seconds] [amplifier] [hideParticles] 来为玩家增加效果。"
-    "对非 OP 玩家：仅当玩家遇到困难或有正当理由时，才考虑给予短时间的增益（例如 10~60 秒、较低等级）。"
-    "不要滥用负面效果或高强度效果，也不要用效果来破坏游戏平衡。"
-    "对 OP 玩家：如果 OP 明确要求你执行某个合理的 /effect 命令，你可以按 OP 的要求执行。"
-    "常见效果（effect 名称 -> 含义）示例："
-    "absorption(额外生命), bad_omen(触发袭击), blindness(致盲), breath_of_the_nautilus(暂停耗氧), conduit_power(潮涌能量), "
-    "darkness(黑暗), fatal_poison(致命中毒), fire_resistance(抗火), haste(急迫), health_boost(生命提升), hunger(饥饿), "
-    "infested(虫蚀), instant_damage(瞬间伤害), instant_health(瞬间治疗), invisibility(隐身), jump_boost(跳跃提升), "
-    "levitation(漂浮), mining_fatigue(挖掘疲劳), nausea(反胃), night_vision(夜视), oozing(渗浆), poison(中毒), "
-    "raid_omen(袭击预兆), regeneration(生命恢复), resistance(抗性), saturation(饱和), slow_falling(缓降), slowness(缓慢), "
-    "speed(速度), strength(力量), trial_omen(试炼预兆), village_hero(村庄英雄), water_breathing(水下呼吸), weakness(虚弱), "
-    "weaving(织网), wind_charged(风爆), wither(凋零)。"
-    "只有当确实需要执行游戏内命令时才这样做，并且要结合玩家是否为 OP 以及请求是否合理进行判断："
-    "如果玩家不是 OP，或者请求的行为明显不合理/具有破坏性，你应该拒绝执行命令并给予解释。"
-    "以下指令或包含这些片段的指令一律禁止执行，例如: kill @e 等具有破坏性的指令。"
-    "坚决不允许执行的指令包括但不限于：stop（关服）、kill（击杀实体相关命令全部禁止）。"
-    "gamemode 仅允许在 OP 玩家明确要求且合理时执行，非 OP 一律禁止。"
-    "如果你无法安全判断，就不要生成 execution_command 标记。"
-    "在你收到的用户消息中，会包含玩家名称以及是否为 OP 的信息，你需要据此谨慎决策。"
+    "需要改游戏世界（劈闪电、给效果、传送、给予物品等）时，必须调用工具 mc_run_command，"
+    "command 参数不要带开头斜杠。"
+    "只有工具不可用时，才在回复里写 [execution_command:实际游戏指令]。"
+    "effect 只能用于药水效果，例如: effect Steve slowness 20 0 true 或 "
+    "effect Steve night_vision 30 0 true。"
+    "劈闪电必须用: execute at 玩家名 run summon lightning_bolt ~ ~ ~"
+    "禁止写成: effect 玩家名 summon ...（summon 不是药水效果，会报 Unknown effect）。"
+    "也不要把 execute / summon / give / tp 塞进 effect 通道。"
+    "对非 OP 玩家：仅当对方遇到困难或有正当理由时，才给短时间增益；惩罚性雷击/负面效果不要滥用。"
+    "对 OP 玩家：对方明确要求且合理时可以执行。"
+    "常见效果名称："
+    "absorption, blindness, darkness, fire_resistance, haste, instant_damage, instant_health, "
+    "invisibility, jump_boost, levitation, mining_fatigue, nausea, night_vision, poison, "
+    "regeneration, resistance, slowness, slow_falling, speed, strength, water_breathing, "
+    "weakness, wither。"
+    "禁止 stop、kill。gamemode 仅 OP 明确要求。无法安全判断就不要执行指令。"
+    "用户消息里会带玩家名和是否为 OP，请据此判断。"
 )
 
 
@@ -87,6 +83,7 @@ class ARCAIHelperPlugin(Plugin):
 
         self._ensure_config_folder()
         self._ensure_default_files()
+        self._upgrade_system_prompt_if_needed()
 
         self.chat_config: Dict[str, Any] = self._load_chat_config()
         self.system_prompt = self._load_text_file(self.system_prompt_path, DEFAULT_SYSTEM_PROMPT)
@@ -486,6 +483,32 @@ class ARCAIHelperPlugin(Plugin):
         if not os.path.exists(self.system_prompt_path):
             with open(self.system_prompt_path, "w", encoding="utf-8") as file:
                 file.write(DEFAULT_SYSTEM_PROMPT)
+
+    def _upgrade_system_prompt_if_needed(self) -> None:
+        """Replace the old effect-only system prompt that caused summon-via-effect."""
+        if not os.path.exists(self.system_prompt_path):
+            return
+        try:
+            with open(self.system_prompt_path, "r", encoding="utf-8") as file:
+                current = file.read()
+        except Exception:
+            return
+        already_new = "mc_run_command" in current and "lightning_bolt" in current
+        looks_old = (
+            "[execution_command:effect DEVILENMO night_vision 1 10]" in current
+            or "你被允许使用 /effect <player> <effect>" in current
+        )
+        if already_new or not looks_old:
+            return
+        try:
+            with open(self.system_prompt_path, "w", encoding="utf-8") as file:
+                file.write(DEFAULT_SYSTEM_PROMPT)
+            self.logger.info(
+                "[ARC AI Helper] 已升级 system_prompt.txt："
+                "优先用 mc_run_command，禁止把 summon 塞进 effect"
+            )
+        except Exception as error:
+            self.logger.warning(f"[ARC AI Helper] 升级 system_prompt.txt 失败: {error}")
 
     def _load_text_file(self, path: str, fallback: str) -> str:
         try:

@@ -107,7 +107,7 @@
 - 无论走 AstrBot 还是本机模型，都会作为「额外系统说明」发送。
 - 适合写：允许使用哪些游戏指令、颜色代码、非 OP 限制等。
 - **不要**在这里写长篇人格；人格由 AstrBot WebUI 配置（有中枢时），或写在 `persona.txt`（降级时）。
-- 默认内容包含 Minecraft 颜色代码和 `[execution_command:…]` 约定。
+- 默认内容包含颜色代码、优先用 `mc_run_command`，以及劈闪电格式 `execute at 玩家名 run summon lightning_bolt ~ ~ ~`。工具不可用时才用 `[execution_command:…]`。
 
 #### 4. `providers.json`
 
@@ -162,6 +162,7 @@
 
 ### 更新日志
 
+- **1.2.3**：能力提示改为优先用 `mc_run_command`，并写明劈闪电格式 `execute at 玩家名 run summon lightning_bolt ~ ~ ~`，避免模型把 summon 塞进 effect。
 - **1.2.2**：修好多开服共用一个默认身份时被中枢互踢、无限重连刷屏；断线后增加冷却，未填 `server_name` 时用端口区分。
 - **1.2.1**：AstrBot 身份改为中枢按绑定 QQ 优先、未绑定再用 XUID，不再传群号；游戏指令仍在消息来源服执行。需搭配中枢 ≥ 1.5.0。
 - **1.2.0**：AstrBot 模式下用玩家 XUID 识别人、用服务器名称当群号，便于记忆插件对上同一个人（改名也能认）；并把查在线、查 TPS、服务器信息、执行指令封装成大模型工具。需搭配中枢 ≥ 1.4.0。
