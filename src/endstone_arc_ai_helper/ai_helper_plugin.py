@@ -1,3 +1,4 @@
+import html
 import json
 import os
 import queue
@@ -10,6 +11,11 @@ from datetime import datetime
 from endstone.event import PlayerChatEvent, PlayerJoinEvent, PlayerDeathEvent, event_handler
 from endstone.plugin import Plugin
 from endstone.form import ModalForm, Label, TextInput, ActionForm
+
+try:
+    from endstone.command import CommandSenderWrapper
+except ImportError:
+    CommandSenderWrapper = None  # type: ignore
 
 from .astrbot_hub_client import AstrBotHubChatClient
 from .chat_ai_manager import ChatAIManager
@@ -127,6 +133,218 @@ class ARCAIHelperPlugin(Plugin):
         server = getattr(self, "server", None)
         name = str(getattr(server, "name", "") or "").strip()
         return name or "mc"
+
+    @staticmethod
+    def _player_xuid(player) -> str:
+        """Return the player's XUID, falling back to a name-based id.
+
+        Args:
+            player: Endstone player object, or None.
+
+        Returns:
+            Stable identity string for AstrBot / memory.
+        """
+        xuid = str(getattr(player, "xuid", "") or "").strip()
+        if xuid:
+            return xuid
+        name = str(getattr(player, "name", "") or "player").strip() or "player"
+        return f"name_{name}"
+
+    def _run_on_server_thread(self, func, timeout: float = 10):
+        """Run a callable on the Endstone server thread and wait for the result.
+
+        Args:
+            func: Zero-argument callable.
+            timeout: Seconds to wait.
+
+        Returns:
+            The callable result.
+
+        Raises:
+            TimeoutError: If the server thread does not finish in time.
+        """
+        result_queue: queue.Queue = queue.Queue()
+
+        def _task():
+            try:
+                result_queue.put((True, func()))
+            except Exception as error:
+                result_queue.put((False, error))
+
+        self.server.scheduler.run_task(self, _task, 0, 0)
+        try:
+            ok, payload = result_queue.get(block=True, timeout=timeout)
+        except queue.Empty as error:
+            raise TimeoutError("服务器主线程执行超时") from error
+        if not ok:
+            raise payload
+        return payload
+
+    def run_ai_tool(self, action: str, args: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        """Execute an AstrBot MC control tool on the game server.
+
+        Args:
+            action: ``list`` / ``tps`` / ``info`` / ``cmd``.
+            args: Extra arguments, including ``command`` / ``is_op``.
+
+        Returns:
+            JSON-serializable dict with ``ok`` and ``text`` or ``error``.
+        """
+        payload = args if isinstance(args, dict) else {}
+        name = str(action or "").strip().lower()
+        try:
+            if name == "list":
+                text = self._run_on_server_thread(self._tool_list_players)
+            elif name == "tps":
+                text = self._run_on_server_thread(self._tool_get_tps)
+            elif name == "info":
+                text = self._run_on_server_thread(self._tool_server_info)
+            elif name == "cmd":
+                text = self._run_on_server_thread(
+                    lambda: self._tool_run_command(
+                        str(payload.get("command") or ""),
+                        bool(payload.get("is_op", False)),
+                    )
+                )
+            else:
+                return {"ok": False, "error": f"未知工具动作: {action}"}
+            return {"ok": True, "text": str(text or "").strip() or "（无返回）"}
+        except Exception as error:
+            self.logger.warning(f"[ARC AI Helper] AI 工具 {action} 失败: {error}")
+            return {"ok": False, "error": str(error)}
+
+    def _tool_list_players(self) -> str:
+        online_players = list(self.server.online_players or [])
+        max_players = getattr(self.server, "max_players", "?")
+        if not online_players:
+            return f"当前没有玩家在线（容量 {max_players}）"
+        lines = [f"在线玩家 ({len(online_players)}/{max_players}):"]
+        for player in online_players:
+            try:
+                ping = player.ping
+                ping_display = f"{ping}ms"
+            except Exception:
+                ping_display = "N/A"
+            xuid = str(getattr(player, "xuid", "") or "").strip() or "未知"
+            lines.append(f"• {player.name}  XUID={xuid}  [{ping_display}]")
+        return "\n".join(lines)
+
+    def _tool_get_tps(self) -> str:
+        current_tps = float(self.server.current_tps)
+        average_tps = float(self.server.average_tps)
+        current_mspt = float(self.server.current_mspt)
+        average_mspt = float(self.server.average_mspt)
+        current_tick_usage = float(self.server.current_tick_usage)
+        average_tick_usage = float(self.server.average_tick_usage)
+        if current_tps >= 19.0:
+            status = "良好"
+        elif current_tps >= 15.0:
+            status = "轻微延迟"
+        else:
+            status = "严重延迟"
+        return (
+            "服务器性能状态:\n"
+            f"• 当前TPS: {current_tps:.2f}/20.0  {status}\n"
+            f"• 平均TPS: {average_tps:.2f}/20.0\n"
+            f"• 当前MSPT: {current_mspt:.2f}ms\n"
+            f"• 平均MSPT: {average_mspt:.2f}ms\n"
+            f"• 当前Tick使用率: {current_tick_usage:.1f}%\n"
+            f"• 平均Tick使用率: {average_tick_usage:.1f}%"
+        )
+
+    def _tool_server_info(self) -> str:
+        online_count = len(list(self.server.online_players or []))
+        max_players = getattr(self.server, "max_players", "?")
+        server_name = self.get_game_server_name()
+        version = getattr(self.server, "version", "未知")
+        minecraft_version = getattr(self.server, "minecraft_version", "未知")
+        start_time = getattr(self.server, "start_time", None)
+        now = datetime.now()
+        uptime_str = "未知"
+        start_str = "未知"
+        if start_time is not None:
+            try:
+                if isinstance(start_time, datetime):
+                    started = start_time
+                elif isinstance(start_time, (int, float)):
+                    started = datetime.fromtimestamp(float(start_time))
+                else:
+                    started = None
+                if started is not None:
+                    start_str = started.strftime("%Y-%m-%d %H:%M:%S")
+                    delta = now - started
+                    seconds = max(0, int(delta.total_seconds()))
+                    hours, rem = divmod(seconds, 3600)
+                    minutes, secs = divmod(rem, 60)
+                    uptime_str = f"{hours}小时{minutes}分{secs}秒"
+            except Exception:
+                pass
+        return (
+            "服务器信息:\n"
+            f"• 服务器名称: {server_name}\n"
+            f"• Endstone版本: {version}\n"
+            f"• Minecraft版本: {minecraft_version}\n"
+            f"• 启动时间: {start_str}\n"
+            f"• 当前时间: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"• 运行时长: {uptime_str}\n"
+            f"• 在线玩家: {online_count}/{max_players}"
+        )
+
+    def _tool_run_command(self, command_to_execute: str, is_op: bool) -> str:
+        command_to_execute = html.unescape(str(command_to_execute or "").strip())
+        if not command_to_execute:
+            return "命令为空"
+
+        normalized = command_to_execute.lstrip("/").strip()
+        if not normalized:
+            return "命令为空"
+        command_name = normalized.lower().split(" ", 1)[0]
+        if command_name in ("stop", "kill"):
+            return f"已拦截危险指令: /{normalized}"
+        if command_name == "gamemode" and (not is_op):
+            return "该指令仅允许 OP 玩家要求时执行，已拦截。"
+
+        msg_ret: List[str] = []
+        error_ret: List[str] = []
+        language = getattr(self.server, "language", None)
+
+        def on_message(msg):
+            if isinstance(msg, str):
+                msg_ret.append(msg)
+                return
+            if language is not None:
+                try:
+                    msg_ret.append(language.translate(msg, language.locale))
+                    return
+                except Exception:
+                    pass
+            msg_ret.append(str(msg))
+
+        def on_error(err):
+            if isinstance(err, str):
+                error_ret.append(err)
+                return
+            if language is not None:
+                try:
+                    error_ret.append(language.translate(err))
+                    return
+                except Exception:
+                    pass
+            error_ret.append(str(err))
+
+        sender = self.server.command_sender
+        if CommandSenderWrapper is not None:
+            sender = CommandSenderWrapper(
+                sender=self.server.command_sender,
+                on_message=on_message,
+                on_error=on_error,
+            )
+        success = bool(self.server.dispatch_command(sender, normalized))
+        lines = list(msg_ret)
+        lines.extend([f"[ERROR] {item}" for item in error_ret])
+        output_text = "\n".join(lines) if lines else "无返回值"
+        status = "成功" if success else "失败, 请检查命令语法或权限"
+        return f"命令已执行: /{normalized}\n状态: {status}\n输出:\n{output_text}"
 
     def _ensure_config_folder(self) -> None:
         os.makedirs(self.config_folder, exist_ok=True)
@@ -392,6 +610,7 @@ class ARCAIHelperPlugin(Plugin):
         user_text: str,
         is_op: bool,
         channel: str,
+        player=None,
     ) -> tuple[bool, str]:
         extra_system = self._build_capability_prompt()
         if (not self.astrbot_client.is_ready()) and (not self.ai_manager.has_provider()):
@@ -401,6 +620,7 @@ class ARCAIHelperPlugin(Plugin):
         if self.astrbot_client.is_ready():
             return self.astrbot_client.chat(
                 player_name=player_name,
+                player_xuid=self._player_xuid(player),
                 content=user_text,
                 is_op=is_op,
                 extra_system_prompt=extra_system,
@@ -426,7 +646,9 @@ class ARCAIHelperPlugin(Plugin):
         with self.history_lock:
             self._append_history_unlocked(player_name, "user", user_text)
 
-        success, reply = self._complete_chat(player_name, user_text, is_op, channel or "gui")
+        success, reply = self._complete_chat(
+            player_name, user_text, is_op, channel or "gui", player=player
+        )
         if not success:
             player.send_message(f"§c{assistant_tag} AI对话失败: {reply}")
             self._open_ai_chat_panel(player)
@@ -453,7 +675,9 @@ class ARCAIHelperPlugin(Plugin):
         with self.history_lock:
             self._append_public_history_unlocked(player_name, "user", user_content)
 
-        success, reply = self._complete_chat(player_name, user_content, is_op, channel or "public")
+        success, reply = self._complete_chat(
+            player_name, user_content, is_op, channel or "public", player=player
+        )
         if not success:
             player.send_message(f"§c{assistant_tag} 对话失败: {reply}")
             return

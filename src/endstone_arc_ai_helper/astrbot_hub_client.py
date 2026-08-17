@@ -76,6 +76,7 @@ class AstrBotHubChatClient:
         self,
         *,
         player_name: str,
+        player_xuid: str,
         content: str,
         is_op: bool,
         extra_system_prompt: str,
@@ -89,6 +90,7 @@ class AstrBotHubChatClient:
         future = asyncio.run_coroutine_threadsafe(
             self._chat(
                 player_name=player_name,
+                player_xuid=player_xuid,
                 content=content,
                 is_op=is_op,
                 extra_system_prompt=extra_system_prompt,
@@ -220,6 +222,8 @@ class AstrBotHubChatClient:
                     fut = self._pending.get(request_id)
                     if fut and not fut.done():
                         fut.set_result(data)
+                elif msg_type == "ai_tool":
+                    asyncio.create_task(self._handle_ai_tool(data))
                 elif msg_type == "pong":
                     pass
                 elif msg_type == "hub_welcome":
@@ -230,10 +234,48 @@ class AstrBotHubChatClient:
         except websockets.exceptions.ConnectionClosed:
             self.logger.warning("[ARC AI Helper] 弧光消息中心连接已断开")
 
+    async def _handle_ai_tool(self, data: dict[str, Any]) -> None:
+        """Run a Hub-requested MC tool on the plugin and reply.
+
+        Args:
+            data: Incoming ``ai_tool`` payload.
+        """
+        request_id = data.get("request_id")
+        action = str(data.get("action") or "")
+        args = data.get("args") if isinstance(data.get("args"), dict) else {}
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None, lambda: self.plugin.run_ai_tool(action, args)
+            )
+            if not isinstance(result, dict):
+                result = {"ok": False, "error": "工具返回格式异常"}
+        except Exception as error:
+            result = {"ok": False, "error": str(error)}
+        ws = self.ws
+        if ws is None:
+            return
+        try:
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "ai_tool_response",
+                        "request_id": request_id,
+                        "ok": bool(result.get("ok")),
+                        "text": result.get("text") or "",
+                        "error": result.get("error") or "",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        except Exception as error:
+            self.logger.warning(f"[ARC AI Helper] 回传 AI 工具结果失败: {error}")
+
     async def _chat(
         self,
         *,
         player_name: str,
+        player_xuid: str,
         content: str,
         is_op: bool,
         extra_system_prompt: str,
@@ -251,6 +293,7 @@ class AstrBotHubChatClient:
             "type": "ai_chat",
             "request_id": request_id,
             "player_name": player_name,
+            "player_xuid": player_xuid,
             "content": content,
             "is_op": bool(is_op),
             "extra_system_prompt": extra_system_prompt,

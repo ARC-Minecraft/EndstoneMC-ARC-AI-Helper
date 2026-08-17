@@ -46,13 +46,13 @@
   - 当该玩家还没有聊天历史时，面板顶部会显示一条 **可配置的初始问候语**。
 
 - **上下文管理**
-  - 走 **AstrBot** 时：每个玩家一条独立会话，人格 / 长期记忆由 AstrBot（及记忆插件）维护；本插件只把当前这句话和 `system_prompt.txt` 能力说明送过去。
+  - 走 **AstrBot** 时：按 Minecraft **服务器名称**当成群、按玩家 **XUID** 当成用户 ID 交给 AstrBot（及记忆插件）。改名仍是同一个人；本插件只送当前这句话和 `system_prompt.txt` 能力说明。中枢还会给模型挂上查在线、查 TPS、执行指令等工具。
   - 走 **本机降级** 时：按玩家名维护多轮对话历史，并把 `persona.txt` + `system_prompt.txt` 一并作为 system 消息。
   - `/ai` GUI 面板仍会在本机保存展示用历史。
 
 ### 与 AstrBot 弧光消息中心对接
 
-需要同时升级 **中枢 ≥ 1.3.0**。插件会用 `role=ai_helper` 单独连 `hub_host:hub_port`，不占用游戏子服编号，也不会在 QQ 里播报开停服。
+需要同时升级 **中枢 ≥ 1.4.0**。插件会用 `role=ai_helper` 单独连 `hub_host:hub_port`，不占用游戏子服编号，也不会在 QQ 里播报开停服。
 
 1. 本机 AstrBot 启用「弧光EndStone消息中枢」，并已配置好模型与人格。
 2. `chat_config.json` 里 `hub_host` / `hub_port` / `hub_token` 与中枢一致（默认同机 `127.0.0.1:19136`）。
@@ -93,7 +93,7 @@
 - **assistant_name**：助手名称，用于聊天输出前缀里的名字部分。
 - **gui_greet_message**：当玩家第一次打开 `/ai` 面板、还没有历史消息时，显示在面板顶部的初始问候语。
 - **hub_host / hub_port / hub_token**：弧光消息中心地址，默认本机 `127.0.0.1:19136`，需与 QQ Sync / 中枢一致。
-- **server_name**：在 AstrBot 会话里区分本服；留空则用 Endstone `server.name`。
+- **server_name**：在 AstrBot 里当作本服「群号」；留空则用 Endstone `server.name`。同一 XUID 在同一服务器名下会落到同一个人。
 - **astrbot_timeout**：走 AstrBot 对话时的超时秒数。
 
 #### 2. `persona.txt`（仅降级使用）
@@ -157,10 +157,11 @@
 
 - 推荐在本地使用 Python 3.13 搭配虚拟环境进行开发。
 - 检查 `providers.json` 是否正确填写了 `base_url` 和 `api_keys`（仅降级路径需要）。
-- 优先确认本机能连上弧光消息中心 `ws://127.0.0.1:19136`，且中枢版本 ≥ 1.3.0。
+- 优先确认本机能连上弧光消息中心 `ws://127.0.0.1:19136`，且中枢版本 ≥ 1.4.0。
 - 若 AI 请求失败，插件会通过玩家聊天或服务器日志输出错误信息，方便排查。
 
 ### 更新日志
 
+- **1.2.0**：AstrBot 模式下用玩家 XUID 识别人、用服务器名称当群号，便于记忆插件对上同一个人（改名也能认）；并把查在线、查 TPS、服务器信息、执行指令封装成大模型工具。需搭配中枢 ≥ 1.4.0。
 - **1.1.0**：本机弧光消息中心可用时走 AstrBot 对话（人格 / 记忆由 AstrBot 维护）；系统提示与人格拆成 `system_prompt.txt` / `persona.txt`，没有 AstrBot 时才用本机人格降级。
 
