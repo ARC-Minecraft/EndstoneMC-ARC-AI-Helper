@@ -6,8 +6,9 @@
 
 - 订阅 `PlayerChatEvent`，根据触发词自动和玩家对话
 - `/ai` 指令打开 GUI 聊天面板，与 AI 进行多轮对话
-- 多 Provider / 多模型轮询配置（支持按 Provider 配置代理）
-- 可配置的起始词、包含词、上下文长度、助手头衔 / 名称、GUI 初始问候语
+- **优先走 AstrBot**：本机有[弧光 EndStone 消息中枢](https://github.com/ARC-Minecraft/AstrBot-ARC-EndStoneMC-Hub) 时，把玩家消息交给 AstrBot 正式对话管线（人格 / 记忆由 AstrBot 维护）
+- 中枢不可用时，再降级到本机 `persona.txt` + `providers.json`
+- 人格与系统提示严格分开：`persona.txt` 只用于降级人格，`system_prompt.txt` 只写能力（指令、颜色代码等）
 
 ### 推荐运行环境
 
@@ -19,7 +20,7 @@
 1. 确保服务器已正确安装并启用 Endstone 的 Python 插件支持。
 2. 将本项目打包并放入 Endstone 对应的 Python 插件目录，或直接把源码按官方示例方式放置。
 3. 启动 / 重启服务器，Endstone 会根据 `pyproject.toml` 中的 entrypoint 自动加载：
-   - 入口：`arc_ai_helper = "endstone_arc_ai_builder:ARCAIHelperPlugin"`
+   - 入口：`arc_ai_helper = "endstone_arc_ai_helper.ai_helper_plugin:ARCAIHelperPlugin"`
 
 ### 基本功能
 
@@ -45,11 +46,18 @@
   - 当该玩家还没有聊天历史时，面板顶部会显示一条 **可配置的初始问候语**。
 
 - **上下文管理**
-  - 按玩家名维护多轮对话历史。
-  - 历史同时用于：
-    - 自动触发的聊天
-    - `/ai` GUI 面板
-  - 上下文长度（最大保存的消息条数）可在配置中设定。
+  - 走 **AstrBot** 时：每个玩家一条独立会话，人格 / 长期记忆由 AstrBot（及记忆插件）维护；本插件只把当前这句话和 `system_prompt.txt` 能力说明送过去。
+  - 走 **本机降级** 时：按玩家名维护多轮对话历史，并把 `persona.txt` + `system_prompt.txt` 一并作为 system 消息。
+  - `/ai` GUI 面板仍会在本机保存展示用历史。
+
+### 与 AstrBot 弧光消息中心对接
+
+需要同时升级 **中枢 ≥ 1.3.0**。插件会用 `role=ai_helper` 单独连 `hub_host:hub_port`，不占用游戏子服编号，也不会在 QQ 里播报开停服。
+
+1. 本机 AstrBot 启用「弧光EndStone消息中枢」，并已配置好模型与人格。
+2. `chat_config.json` 里 `hub_host` / `hub_port` / `hub_token` 与中枢一致（默认同机 `127.0.0.1:19136`）。
+3. 连接成功后日志会出现：`对话走 AstrBot 人格/记忆`。
+4. 中枢连不上或版本过旧时，自动退回 `persona.txt` + `providers.json`。
 
 ### 配置文件说明
 
@@ -64,31 +72,44 @@
   "prefix_triggers": ["天星"],
   "contain_triggers": ["请问", "吗", "?", "？"],
   "max_history_messages": 20,
+  "max_queue_size": 10,
   "assistant_title": "AI助手",
   "assistant_name": "弧光天星",
-  "gui_greet_message": "你好，我是弧光天星服务器小助理，请问有什么可以帮助您的？"
+  "gui_greet_message": "你好，我是弧光天星服务器小助理，请问有什么可以帮助您的？",
+  "welcome_message": "欢迎来到弧光大陆服务器，我是人工智能助手弧光天星，需要找我的话喊我的名字天星就可以啦",
+  "death_tip_message": "遇到困难了吗？有问题可以问我哦~喊我的名字天星我就来帮助你啦！",
+  "hub_host": "127.0.0.1",
+  "hub_port": 19136,
+  "hub_token": "",
+  "server_name": "",
+  "astrbot_timeout": 180
 }
 ```
 
 - **prefix_triggers**：起始词列表。若玩家消息以任意一项开头，则触发 AI 回复。
 - **contain_triggers**：包含词列表。若玩家消息中包含任意一项，也会触发 AI 回复。
-- **max_history_messages**：为每个玩家保存的最大历史消息条数（user + assistant 混合），超出会从旧的开始丢弃。
+- **max_history_messages**：为每个玩家保存的最大历史消息条数（user + assistant 混合），超出会从旧的开始丢弃。走 AstrBot 时这条只影响 GUI 展示，模型记忆由 AstrBot 维护。
 - **assistant_title**：助手头衔，用于聊天输出前缀里的 `\[头衔]`。
 - **assistant_name**：助手名称，用于聊天输出前缀里的名字部分。
 - **gui_greet_message**：当玩家第一次打开 `/ai` 面板、还没有历史消息时，显示在面板顶部的初始问候语。
+- **hub_host / hub_port / hub_token**：弧光消息中心地址，默认本机 `127.0.0.1:19136`，需与 QQ Sync / 中枢一致。
+- **server_name**：在 AstrBot 会话里区分本服；留空则用 Endstone `server.name`。
+- **astrbot_timeout**：走 AstrBot 对话时的超时秒数。
 
-#### 2. `system_prompt.txt`
+#### 2. `persona.txt`（仅降级使用）
 
-- 用于设定系统级提示词，每次构造对话 messages 时，都会作为第一条 `system` 消息发送给模型。
-- 默认内容示例：
+- **只有中枢不可用、走本机 `providers.json` 时才会发给模型。**
+- 用来写人格、口吻、自称，不再把指令权限写在这里。
+- 升级自旧版时：若原来的 `system_prompt.txt` 只是人格短文，会自动挪到本文件。
 
-```text
-你是Minecraft服务器中的AI助手“天星”，需要用友好、简洁的中文回答玩家的问题，并尽量结合游戏内的背景来解释。
-```
+#### 3. `system_prompt.txt`（能力 / 策略，两条路径都会用）
 
-你可以根据实际服务器风格自由修改，比如增加玩家称呼、规则说明等。
+- 无论走 AstrBot 还是本机模型，都会作为「额外系统说明」发送。
+- 适合写：允许使用哪些游戏指令、颜色代码、非 OP 限制等。
+- **不要**在这里写长篇人格；人格由 AstrBot WebUI 配置（有中枢时），或写在 `persona.txt`（降级时）。
+- 默认内容包含 Minecraft 颜色代码和 `[execution_command:…]` 约定。
 
-#### 3. `providers.json`
+#### 4. `providers.json`
 
 用于配置一个或多个 AI Provider，支持多 API base URL、多密钥、多模型。
 
@@ -135,6 +156,11 @@
 ### 开发与调试建议
 
 - 推荐在本地使用 Python 3.13 搭配虚拟环境进行开发。
-- 检查 `providers.json` 是否正确填写了 `base_url` 和 `api_keys`，并确认网络连通性；若模型需翻墙，确认本机代理已开启且 `proxy` 配置正确。
+- 检查 `providers.json` 是否正确填写了 `base_url` 和 `api_keys`（仅降级路径需要）。
+- 优先确认本机能连上弧光消息中心 `ws://127.0.0.1:19136`，且中枢版本 ≥ 1.3.0。
 - 若 AI 请求失败，插件会通过玩家聊天或服务器日志输出错误信息，方便排查。
+
+### 更新日志
+
+- **1.1.0**：本机弧光消息中心可用时走 AstrBot 对话（人格 / 记忆由 AstrBot 维护）；系统提示与人格拆成 `system_prompt.txt` / `persona.txt`，没有 AstrBot 时才用本机人格降级。
 

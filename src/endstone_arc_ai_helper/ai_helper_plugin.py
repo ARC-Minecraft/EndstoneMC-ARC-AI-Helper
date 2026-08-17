@@ -3,6 +3,7 @@ import os
 import queue
 import re
 import threading
+import time
 from typing import Any, Dict, List
 from datetime import datetime
 
@@ -10,7 +11,43 @@ from endstone.event import PlayerChatEvent, PlayerJoinEvent, PlayerDeathEvent, e
 from endstone.plugin import Plugin
 from endstone.form import ModalForm, Label, TextInput, ActionForm
 
+from .astrbot_hub_client import AstrBotHubChatClient
 from .chat_ai_manager import ChatAIManager
+
+
+DEFAULT_PERSONA = (
+    "你是Minecraft服务器中的AI助手“天星”，需要用友好、简洁的中文回答玩家的问题，"
+    "并尽量结合游戏内的背景来解释。"
+)
+
+DEFAULT_SYSTEM_PROMPT = (
+    "你运行在 Minecraft 服务器中，所有回复都会直接显示在游戏聊天栏。"
+    "请使用 Minecraft 的颜色代码和格式代码来美化消息，而不要使用 Markdown 或其他标记语言。"
+    "常用颜色代码示例: §0黑色, §1深蓝, §2深绿, §3深青, §4深红, §5深紫, §6金色, §7灰色, "
+    "§8深灰, §9蓝色, §a绿色, §b青色, §c红色, §d淡紫, §e黄色, §f白色。"
+    "常用格式代码示例: §l粗体, §n下划线, §o斜体, §k随机字符, §m删除线, §r重置格式。"
+    "你可以在需要时通过在回复中加入形如 [execution_command:实际游戏指令] 的标记，让服务器帮你执行指令，"
+    "例如: [execution_command:effect DEVILENMO night_vision 1 10]。"
+    "你被允许使用 /effect <player> <effect> [seconds] [amplifier] [hideParticles] 来为玩家增加效果。"
+    "对非 OP 玩家：仅当玩家遇到困难或有正当理由时，才考虑给予短时间的增益（例如 10~60 秒、较低等级）。"
+    "不要滥用负面效果或高强度效果，也不要用效果来破坏游戏平衡。"
+    "对 OP 玩家：如果 OP 明确要求你执行某个合理的 /effect 命令，你可以按 OP 的要求执行。"
+    "常见效果（effect 名称 -> 含义）示例："
+    "absorption(额外生命), bad_omen(触发袭击), blindness(致盲), breath_of_the_nautilus(暂停耗氧), conduit_power(潮涌能量), "
+    "darkness(黑暗), fatal_poison(致命中毒), fire_resistance(抗火), haste(急迫), health_boost(生命提升), hunger(饥饿), "
+    "infested(虫蚀), instant_damage(瞬间伤害), instant_health(瞬间治疗), invisibility(隐身), jump_boost(跳跃提升), "
+    "levitation(漂浮), mining_fatigue(挖掘疲劳), nausea(反胃), night_vision(夜视), oozing(渗浆), poison(中毒), "
+    "raid_omen(袭击预兆), regeneration(生命恢复), resistance(抗性), saturation(饱和), slow_falling(缓降), slowness(缓慢), "
+    "speed(速度), strength(力量), trial_omen(试炼预兆), village_hero(村庄英雄), water_breathing(水下呼吸), weakness(虚弱), "
+    "weaving(织网), wind_charged(风爆), wither(凋零)。"
+    "只有当确实需要执行游戏内命令时才这样做，并且要结合玩家是否为 OP 以及请求是否合理进行判断："
+    "如果玩家不是 OP，或者请求的行为明显不合理/具有破坏性，你应该拒绝执行命令并给予解释。"
+    "以下指令或包含这些片段的指令一律禁止执行，例如: kill @e 等具有破坏性的指令。"
+    "坚决不允许执行的指令包括但不限于：stop（关服）、kill（击杀实体相关命令全部禁止）。"
+    "gamemode 仅允许在 OP 玩家明确要求且合理时执行，非 OP 一律禁止。"
+    "如果你无法安全判断，就不要生成 execution_command 标记。"
+    "在你收到的用户消息中，会包含玩家名称以及是否为 OP 的信息，你需要据此谨慎决策。"
+)
 
 
 class ARCAIHelperPlugin(Plugin):
@@ -40,13 +77,16 @@ class ARCAIHelperPlugin(Plugin):
         self.chat_config_path = os.path.join(self.config_folder, "chat_config.json")
         self.providers_config_path = os.path.join(self.config_folder, "providers.json")
         self.system_prompt_path = os.path.join(self.config_folder, "system_prompt.txt")
+        self.persona_path = os.path.join(self.config_folder, "persona.txt")
 
         self._ensure_config_folder()
         self._ensure_default_files()
 
         self.chat_config: Dict[str, Any] = self._load_chat_config()
-        self.system_prompt = self._load_system_prompt()
+        self.system_prompt = self._load_text_file(self.system_prompt_path, DEFAULT_SYSTEM_PROMPT)
+        self.persona_prompt = self._load_text_file(self.persona_path, DEFAULT_PERSONA)
         self.ai_manager = ChatAIManager(self.providers_config_path)
+        self.astrbot_client = AstrBotHubChatClient(self)
 
         self.player_histories: Dict[str, List[Dict[str, str]]] = {}
         self.public_history: List[Dict[str, str]] = []
@@ -66,11 +106,27 @@ class ARCAIHelperPlugin(Plugin):
         self.register_events(self)
 
         self._start_worker_if_needed()
+        self.astrbot_client.start()
 
         if not self.ai_manager.has_provider():
-            self.logger.warning(
-                "[ARC AI Helper] 未找到有效的Provider配置，请编辑 providers.json 后重载插件。"
+            self.logger.info(
+                "[ARC AI Helper] 未配置 providers.json。若本机弧光消息中心可用则走 AstrBot；"
+                "否则需要配置本机模型后才能降级对话。"
             )
+
+    def on_disable(self) -> None:
+        try:
+            self.astrbot_client.stop()
+        except Exception:
+            pass
+
+    def get_game_server_name(self) -> str:
+        cfg_name = str(self.chat_config.get("server_name") or "").strip()
+        if cfg_name:
+            return cfg_name
+        server = getattr(self, "server", None)
+        name = str(getattr(server, "name", "") or "").strip()
+        return name or "mc"
 
     def _ensure_config_folder(self) -> None:
         os.makedirs(self.config_folder, exist_ok=True)
@@ -87,17 +143,22 @@ class ARCAIHelperPlugin(Plugin):
                 "gui_greet_message": "你好，我是弧光天星服务器小助理，请问有什么可以帮助您的？",
                 "welcome_message": "欢迎来到弧光大陆服务器，我是人工智能助手弧光天星，需要我的话喊我的名字天星就可以啦",
                 "death_tip_message": "遇到困难了吗？有问题可以问我哦~喊我的名字天星我就来帮助你啦！",
+                "hub_host": "127.0.0.1",
+                "hub_port": 19136,
+                "hub_token": "",
+                "server_name": "",
+                "astrbot_timeout": 180,
             }
             with open(self.chat_config_path, "w", encoding="utf-8") as file:
                 json.dump(default_chat_config, file, ensure_ascii=False, indent=2)
 
-        if not os.path.exists(self.system_prompt_path):
-            default_prompt = (
-                "你是Minecraft服务器中的AI助手“天星”，需要用友好、简洁的中文回答玩家的问题，"
-                "并尽量结合游戏内的背景来解释。"
-            )
+        if not os.path.exists(self.system_prompt_path) and not os.path.exists(self.persona_path):
+            with open(self.persona_path, "w", encoding="utf-8") as file:
+                file.write(DEFAULT_PERSONA)
             with open(self.system_prompt_path, "w", encoding="utf-8") as file:
-                file.write(default_prompt)
+                file.write(DEFAULT_SYSTEM_PROMPT)
+        else:
+            self._migrate_persona_and_system_prompt()
 
         if not os.path.exists(self.providers_config_path):
             default_providers = [
@@ -137,10 +198,12 @@ class ARCAIHelperPlugin(Plugin):
             "welcome_message",
             "欢迎来到弧光大陆服务器，我是人工智能助手弧光天星，需要找我的话喊我的名字天星就可以啦",
         )
-        data.setdefault(
-            "death_tip_message",
-            "遇到困难了吗？有问题可以问我哦~喊我的名字天星我就来帮助你啦！",
-        )
+        data.setdefault("death_tip_message", "遇到困难了吗？有问题可以问我哦~喊我的名字天星我就来帮助你啦！")
+        data.setdefault("hub_host", "127.0.0.1")
+        data.setdefault("hub_port", 19136)
+        data.setdefault("hub_token", "")
+        data.setdefault("server_name", "")
+        data.setdefault("astrbot_timeout", 180)
 
         try:
             max_history = int(data.get("max_history_messages", 20))
@@ -148,17 +211,56 @@ class ARCAIHelperPlugin(Plugin):
             max_history = 20
         data["max_history_messages"] = max(1, max_history)
 
+        try:
+            hub_port = int(data.get("hub_port", 19136))
+        except Exception:
+            hub_port = 19136
+        data["hub_port"] = hub_port
+
+        try:
+            astrbot_timeout = int(data.get("astrbot_timeout", 180))
+        except Exception:
+            astrbot_timeout = 180
+        data["astrbot_timeout"] = max(10, astrbot_timeout)
+
         return data
 
-    def _load_system_prompt(self) -> str:
+    def _migrate_persona_and_system_prompt(self) -> None:
+        """Split legacy mixed system_prompt.txt into persona + capability prompts."""
+        if not os.path.exists(self.persona_path) and os.path.exists(self.system_prompt_path):
+            try:
+                with open(self.system_prompt_path, "r", encoding="utf-8") as file:
+                    old = file.read().strip()
+            except Exception:
+                old = ""
+            if old and "execution_command" not in old:
+                with open(self.persona_path, "w", encoding="utf-8") as file:
+                    file.write(old)
+                with open(self.system_prompt_path, "w", encoding="utf-8") as file:
+                    file.write(DEFAULT_SYSTEM_PROMPT)
+                self.logger.info(
+                    "[ARC AI Helper] 已将原 system_prompt.txt 迁移为 persona.txt，"
+                    "并写入新的能力向 system_prompt.txt"
+                )
+            elif not os.path.exists(self.persona_path):
+                with open(self.persona_path, "w", encoding="utf-8") as file:
+                    file.write(DEFAULT_PERSONA)
+
+        if not os.path.exists(self.persona_path):
+            with open(self.persona_path, "w", encoding="utf-8") as file:
+                file.write(DEFAULT_PERSONA)
+        if not os.path.exists(self.system_prompt_path):
+            with open(self.system_prompt_path, "w", encoding="utf-8") as file:
+                file.write(DEFAULT_SYSTEM_PROMPT)
+
+    def _load_text_file(self, path: str, fallback: str) -> str:
         try:
-            with open(self.system_prompt_path, "r", encoding="utf-8") as file:
-                return file.read().strip()
+            with open(path, "r", encoding="utf-8") as file:
+                text = file.read().strip()
+            return text or fallback
         except Exception as error:
-            self.logger.error(f"[ARC AI Helper] 加载 system_prompt.txt 失败: {error}")
-            return (
-                "你是Minecraft服务器中的AI助手“天星”，需要用友好、简洁的中文回答玩家的问题。"
-            )
+            self.logger.error(f"[ARC AI Helper] 加载 {os.path.basename(path)} 失败: {error}")
+            return fallback
 
     def _should_trigger_for_message(self, message: str) -> bool:
         message = message.strip()
@@ -251,11 +353,12 @@ class ARCAIHelperPlugin(Plugin):
                     player_name = str(job.get("player_name") or "")
                     user_content = str(job.get("user_content") or "")
                     is_op = bool(job.get("is_op", False))
+                    channel = str(job.get("channel") or job_type or "public")
 
                     if job_type == "gui":
-                        self._process_gui_job(player, player_name, user_content, is_op)
+                        self._process_gui_job(player, player_name, user_content, is_op, channel)
                     elif job_type == "public":
-                        self._process_public_job(player, player_name, user_content, is_op)
+                        self._process_public_job(player, player_name, user_content, is_op, channel)
                 except Exception as error:
                     try:
                         player = job.get("player")
@@ -270,7 +373,50 @@ class ARCAIHelperPlugin(Plugin):
 
         threading.Thread(target=worker_loop, daemon=True).start()
 
-    def _process_gui_job(self, player, player_name: str, user_text: str, is_op: bool) -> None:
+    def _has_chat_backend(self) -> bool:
+        return (
+            self.astrbot_client.is_ready()
+            or self.ai_manager.has_provider()
+            or self.astrbot_client.is_connecting()
+        )
+
+    def _astrbot_timeout(self) -> float:
+        try:
+            return float(self.chat_config.get("astrbot_timeout", 180))
+        except Exception:
+            return 180.0
+
+    def _complete_chat(
+        self,
+        player_name: str,
+        user_text: str,
+        is_op: bool,
+        channel: str,
+    ) -> tuple[bool, str]:
+        extra_system = self._build_capability_prompt()
+        if (not self.astrbot_client.is_ready()) and (not self.ai_manager.has_provider()):
+            deadline = time.time() + 5
+            while time.time() < deadline and not self.astrbot_client.is_ready():
+                time.sleep(0.2)
+        if self.astrbot_client.is_ready():
+            return self.astrbot_client.chat(
+                player_name=player_name,
+                content=user_text,
+                is_op=is_op,
+                extra_system_prompt=extra_system,
+                channel=channel,
+                server_name=self.get_game_server_name(),
+                timeout=self._astrbot_timeout(),
+            )
+        if not self.ai_manager.has_provider():
+            return False, "未连接弧光消息中心，且未配置本机 AI Provider。"
+        with self.history_lock:
+            messages = self._build_messages_for_player(player_name, user_text, is_op)
+        return self.ai_manager.chat(messages)
+
+    def _process_gui_job(
+        self, player, player_name: str, user_text: str, is_op: bool, channel: str = "gui"
+    ) -> None:
         assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
         assistant_tag = f"[{assistant_name}]"
 
@@ -279,9 +425,8 @@ class ARCAIHelperPlugin(Plugin):
 
         with self.history_lock:
             self._append_history_unlocked(player_name, "user", user_text)
-            messages = self._build_messages_for_player(player_name, user_text, is_op)
 
-        success, reply = self.ai_manager.chat(messages)
+        success, reply = self._complete_chat(player_name, user_text, is_op, channel or "gui")
         if not success:
             player.send_message(f"§c{assistant_tag} AI对话失败: {reply}")
             self._open_ai_chat_panel(player)
@@ -296,7 +441,9 @@ class ARCAIHelperPlugin(Plugin):
 
         self._open_ai_chat_panel(player)
 
-    def _process_public_job(self, player, player_name: str, user_content: str, is_op: bool) -> None:
+    def _process_public_job(
+        self, player, player_name: str, user_content: str, is_op: bool, channel: str = "public"
+    ) -> None:
         assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
         assistant_tag = f"[{assistant_name}]"
 
@@ -305,9 +452,8 @@ class ARCAIHelperPlugin(Plugin):
 
         with self.history_lock:
             self._append_public_history_unlocked(player_name, "user", user_content)
-            messages = self._build_messages_for_player(player_name, user_content, is_op)
 
-        success, reply = self.ai_manager.chat(messages)
+        success, reply = self._complete_chat(player_name, user_content, is_op, channel or "public")
         if not success:
             player.send_message(f"§c{assistant_tag} 对话失败: {reply}")
             return
@@ -355,46 +501,28 @@ class ARCAIHelperPlugin(Plugin):
             self._arc_core_newbie_guide_cache = text
         return text
 
-    def _build_system_prompt(self) -> str:
-        base_prompt = self.system_prompt or ""
-        newbie_guide_text = self._get_arc_core_newbie_guide_text()
-        command_prompt = (
-            "你是运行在 Minecraft 服务器中的聊天助手“天星”，你的所有回复都会直接显示在游戏聊天栏中。"
-            "请使用 Minecraft 的颜色代码和格式代码来美化消息，而不要使用 Markdown 或其他标记语言。"
-            "常用颜色代码示例: §0黑色, §1深蓝, §2深绿, §3深青, §4深红, §5深紫, §6金色, §7灰色, "
-            "§8深灰, §9蓝色, §a绿色, §b青色, §c红色, §d淡紫, §e黄色, §f白色。"
-            "常用格式代码示例: §l粗体, §n下划线, §o斜体, §k随机字符, §m删除线, §r重置格式。"
-            "你可以在需要时通过在回复中加入形如 [execution_command:实际游戏指令] 的标记，让服务器帮你执行指令，"
-            "例如: [execution_command:effect DEVILENMO night_vision 1 10]。"
-            "你被允许使用 /effect <player> <effect> [seconds] [amplifier] [hideParticles] 来为玩家增加效果。"
-            "对非 OP 玩家：仅当玩家遇到困难或有正当理由时，才考虑给予短时间的增益（例如 10~60 秒、较低等级）。"
-            "不要滥用负面效果或高强度效果，也不要用效果来破坏游戏平衡。"
-            "对 OP 玩家：如果 OP 明确要求你执行某个合理的 /effect 命令，你可以按 OP 的要求执行。"
-            "常见效果（effect 名称 -> 含义）示例："
-            "absorption(额外生命), bad_omen(触发袭击), blindness(致盲), breath_of_the_nautilus(暂停耗氧), conduit_power(潮涌能量), "
-            "darkness(黑暗), fatal_poison(致命中毒), fire_resistance(抗火), haste(急迫), health_boost(生命提升), hunger(饥饿), "
-            "infested(虫蚀), instant_damage(瞬间伤害), instant_health(瞬间治疗), invisibility(隐身), jump_boost(跳跃提升), "
-            "levitation(漂浮), mining_fatigue(挖掘疲劳), nausea(反胃), night_vision(夜视), oozing(渗浆), poison(中毒), "
-            "raid_omen(袭击预兆), regeneration(生命恢复), resistance(抗性), saturation(饱和), slow_falling(缓降), slowness(缓慢), "
-            "speed(速度), strength(力量), trial_omen(试炼预兆), village_hero(村庄英雄), water_breathing(水下呼吸), weakness(虚弱), "
-            "weaving(织网), wind_charged(风爆), wither(凋零)。"
-            "只有当确实需要执行游戏内命令时才这样做，并且要结合玩家是否为 OP 以及请求是否合理进行判断："
-            "如果玩家不是 OP，或者请求的行为明显不合理/具有破坏性，你应该拒绝执行命令并给予解释。"
-            "以下指令或包含这些片段的指令一律禁止执行，例如: kill @e 等具有破坏性的指令。"
-            "坚决不允许执行的指令包括但不限于：stop（关服）、kill（击杀实体相关命令全部禁止）。"
-            "gamemode 仅允许在 OP 玩家明确要求且合理时执行，非 OP 一律禁止。"
-            "如果你无法安全判断，就不要生成 execution_command 标记。"
-            "在你收到的用户消息中，会包含玩家名称以及是否为 OP 的信息，你需要据此谨慎决策。"
-        )
-
+    def _build_capability_prompt(self) -> str:
+        """Capability / policy prompt only. Persona is not included."""
         parts: List[str] = []
+        base_prompt = (self.system_prompt or "").strip()
         if base_prompt:
             parts.append(base_prompt)
+        newbie_guide_text = self._get_arc_core_newbie_guide_text()
         if newbie_guide_text:
             parts.append(
                 "【新手引导（来自 arc_core 的 newbie_welcome.txt）】\n" + newbie_guide_text
             )
-        parts.append(command_prompt)
+        return "\n\n".join(parts)
+
+    def _build_system_prompt(self) -> str:
+        """Local fallback: persona + capability instructions."""
+        parts: List[str] = []
+        persona = (self.persona_prompt or "").strip()
+        if persona:
+            parts.append(persona)
+        capability = self._build_capability_prompt()
+        if capability:
+            parts.append(capability)
         return "\n\n".join(parts)
 
     def _handle_ai_reply_commands(self, reply_text: str, sender) -> str:
@@ -589,6 +717,7 @@ class ARCAIHelperPlugin(Plugin):
                     "player_name": sender.name,
                     "user_content": user_text,
                     "is_op": is_op,
+                    "channel": "gui",
                 }
             )
 
@@ -623,10 +752,12 @@ class ARCAIHelperPlugin(Plugin):
         if not self._should_trigger_for_message(message):
             return
 
-        if not self.ai_manager.has_provider():
+        if not self._has_chat_backend():
             assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
             assistant_tag = f"[{assistant_name}]"
-            player.send_message(f"§c{assistant_tag} 尚未配置AI服务，请联系管理员。")
+            player.send_message(
+                f"§c{assistant_tag} 尚未连接弧光消息中心，也未配置本机 AI 服务，请联系管理员。"
+            )
             return
 
         player_name = player.name
@@ -657,8 +788,9 @@ class ARCAIHelperPlugin(Plugin):
                 "owner_name": player_name,
                 "player": player,
                 "player_name": player_name,
-                "user_content": user_content,
-                "is_op": is_op,
+                    "user_content": user_content,
+                    "is_op": is_op,
+                    "channel": "public",
             }
         )
 
