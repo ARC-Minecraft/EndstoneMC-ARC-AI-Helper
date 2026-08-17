@@ -144,7 +144,9 @@ class AstrBotHubChatClient:
             host, port, token, client_name = self._resolve_hub_config()
             uri = f"ws://{host}:{port}"
             try:
-                self.logger.info(f"[ARC AI Helper] 正在连接弧光消息中心 {uri} ...")
+                self.logger.info(
+                    f"[ARC AI Helper] 正在连接弧光消息中心 {uri}（身份 {client_name}）..."
+                )
                 async with websockets.connect(
                     uri,
                     ping_interval=20,
@@ -192,6 +194,14 @@ class AstrBotHubChatClient:
                         "[ARC AI Helper] 已连接弧光消息中心，对话走 AstrBot 人格/记忆"
                     )
                     await self._message_loop(ws)
+                    self._fail_pending(ConnectionError("Hub 连接已断开"))
+                    if not self._running:
+                        break
+                    self.logger.warning(
+                        f"[ARC AI Helper] 弧光消息中心连接结束，{delay:.0f}s 后重连"
+                    )
+                    await asyncio.sleep(delay)
+                    delay = min(30.0, delay * 1.5)
             except Exception as error:
                 self.ws = None
                 self._ai_chat_enabled = False

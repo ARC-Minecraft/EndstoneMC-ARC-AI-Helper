@@ -93,7 +93,7 @@
 - **assistant_name**：助手名称，用于聊天输出前缀里的名字部分。
 - **gui_greet_message**：当玩家第一次打开 `/ai` 面板、还没有历史消息时，显示在面板顶部的初始问候语。
 - **hub_host / hub_port / hub_token**：弧光消息中心地址，默认本机 `127.0.0.1:19136`，需与 QQ Sync / 中枢一致。
-- **server_name**：本服显示名，走 AstrBot 时用来把工具打回**这台服**执行；留空则用 Endstone `server.name`。不再当作 AstrBot 群号。
+- **server_name**：本服显示名，走 AstrBot 时用来把工具打回**这台服**执行；**多开服必须互不相同**，建议与 QQ Sync 的 `server_name` 一致。留空则用 Endstone `server.name`，再撞名则用 `mc-{端口}`。不再当作 AstrBot 群号。
 - **astrbot_timeout**：走 AstrBot 对话时的超时秒数。
 
 #### 2. `persona.txt`（仅降级使用）
@@ -162,6 +162,7 @@
 
 ### 更新日志
 
+- **1.2.2**：修好多开服共用一个默认身份时被中枢互踢、无限重连刷屏；断线后增加冷却，未填 `server_name` 时用端口区分。
 - **1.2.1**：AstrBot 身份改为中枢按绑定 QQ 优先、未绑定再用 XUID，不再传群号；游戏指令仍在消息来源服执行。需搭配中枢 ≥ 1.5.0。
 - **1.2.0**：AstrBot 模式下用玩家 XUID 识别人、用服务器名称当群号，便于记忆插件对上同一个人（改名也能认）；并把查在线、查 TPS、服务器信息、执行指令封装成大模型工具。需搭配中枢 ≥ 1.4.0。
 - **1.1.0**：本机弧光消息中心可用时走 AstrBot 对话（人格 / 记忆由 AstrBot 维护）；系统提示与人格拆成 `system_prompt.txt` / `persona.txt`，没有 AstrBot 时才用本机人格降级。

@@ -111,6 +111,13 @@ class ARCAIHelperPlugin(Plugin):
         self.logger.info("[ARC AI Helper] on_enable called")
         self.register_events(self)
 
+        if not str(self.chat_config.get("server_name") or "").strip():
+            self.logger.warning(
+                "[ARC AI Helper] chat_config.json 未填写 server_name。"
+                "多开服时必须互不相同（建议与 QQ Sync 一致），"
+                f"当前身份：{self.get_game_server_name()}"
+            )
+
         self._start_worker_if_needed()
         self.astrbot_client.start()
 
@@ -132,7 +139,16 @@ class ARCAIHelperPlugin(Plugin):
             return cfg_name
         server = getattr(self, "server", None)
         name = str(getattr(server, "name", "") or "").strip()
-        return name or "mc"
+        generic = {"", "mc", "dedicated server", "minecraft server"}
+        if name and name.lower() not in generic:
+            return name
+        try:
+            port = int(getattr(server, "port", 0) or 0)
+        except Exception:
+            port = 0
+        if port:
+            return f"mc-{port}"
+        return "mc"
 
     @staticmethod
     def _player_xuid(player) -> str:
