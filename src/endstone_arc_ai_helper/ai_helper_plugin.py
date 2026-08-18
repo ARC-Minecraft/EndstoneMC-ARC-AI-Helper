@@ -197,7 +197,7 @@ class ARCAIHelperPlugin(Plugin):
         """Execute an AstrBot MC control tool on the game server.
 
         Args:
-            action: ``list`` / ``tps`` / ``info`` / ``cmd`` / ``jail`` / ``release`` / ``prisoners``.
+            action: ``list`` / ``tps`` / ``info`` / ``cmd`` / ``jail`` / ``release`` / ``prisoners`` / ``skyeye_player`` / ``skyeye_combat`` / ``skyeye_location``.
             args: Extra arguments, including ``command`` / ``is_op``.
 
         Returns:
@@ -225,6 +225,12 @@ class ARCAIHelperPlugin(Plugin):
                 text = self._run_on_server_thread(lambda: self._tool_release_player(payload))
             elif name in ("prisoners", "list_prisoners"):
                 text = self._run_on_server_thread(self._tool_list_prisoners)
+            elif name in ("skyeye_player", "sky_eye_player"):
+                text = self._run_on_server_thread(lambda: self._tool_skyeye_player(payload))
+            elif name in ("skyeye_combat", "sky_eye_combat"):
+                text = self._run_on_server_thread(lambda: self._tool_skyeye_combat(payload))
+            elif name in ("skyeye_location", "sky_eye_location"):
+                text = self._run_on_server_thread(lambda: self._tool_skyeye_location(payload))
             else:
                 return {"ok": False, "error": f"未知工具动作: {action}"}
             return {"ok": True, "text": str(text or "").strip() or "（无返回）"}
@@ -442,6 +448,128 @@ class ARCAIHelperPlugin(Plugin):
             online = "在线" if item.get("is_online") else "离线"
             lines.append(f"• {name}  剩余:{remain}  原因:{reason}  [{online}]")
         return "\n".join(lines)
+
+    def _get_arc_core_plugin(self):
+        plugin_manager = getattr(self.server, "plugin_manager", None)
+        if plugin_manager is None:
+            return None
+        try:
+            return plugin_manager.get_plugin("arc_core")
+        except Exception:
+            return None
+
+    def _tool_skyeye_require_admin(self, payload: Dict[str, Any]) -> str:
+        if not bool(payload.get("is_op", False)):
+            return "没有权限：天眼查询仅管理员（OP）或 QQ 群管理可以使用。"
+        return ""
+
+    def _parse_skyeye_minutes(self, payload: Dict[str, Any], default: int = 30) -> int:
+        raw = payload.get("minutes")
+        if raw in (None, ""):
+            return default
+        try:
+            return max(1, min(int(raw), 24 * 60 * 7))
+        except (TypeError, ValueError):
+            return default
+
+    def _tool_skyeye_player(self, payload: Dict[str, Any]) -> str:
+        denied = self._tool_skyeye_require_admin(payload)
+        if denied:
+            return denied
+        core = self._get_arc_core_plugin()
+        if core is None:
+            return "本服未安装弧光核心 arc_core"
+        query_text = getattr(core, "api_sky_eye_query_text", None)
+        player_now = getattr(core, "api_sky_eye_player_now", None)
+        player_name = str(payload.get("player_name") or "").strip()
+        if not player_name:
+            return "玩家名为空"
+        minutes = self._parse_skyeye_minutes(payload, 30)
+        action = str(payload.get("action") or "").strip()
+        parts: List[str] = []
+        if callable(player_now):
+            now_info = player_now(player_name=player_name)
+            if isinstance(now_info, dict) and now_info.get("source"):
+                name = now_info.get("player_name") or player_name
+                if now_info.get("online") and now_info.get("x") is not None:
+                    pos = f"{float(now_info.get('x')):.1f},{float(now_info.get('y')):.1f},{float(now_info.get('z')):.1f}"
+                    land = "荒野"
+                    if now_info.get("in_land"):
+                        land = f"领地内 {now_info.get('land_name') or ''}（主人 {now_info.get('land_owner') or '?'}）"
+                    parts.append(f"{name} 当前在线  {now_info.get('dimension')} ({pos})  {land}")
+                elif now_info.get("source") == "sky_eye":
+                    parts.append(
+                        f"{name} 当前不在线，最近一次天眼: {now_info.get('last_ts')} "
+                        f"{now_info.get('last_action')} {now_info.get('dimension')} "
+                        f"({now_info.get('x')},{now_info.get('y')},{now_info.get('z')})"
+                    )
+                else:
+                    parts.append(f"{name} 当前不在线，天眼里也没有记录。")
+        if callable(query_text):
+            parts.append(
+                query_text(
+                    player_name=player_name,
+                    action=action,
+                    minutes=minutes,
+                    heading=f"{player_name} 近 {minutes} 分钟行为",
+                )
+            )
+        else:
+            parts.append("弧光核心版本过旧，没有天眼查询接口")
+        return "\n".join(parts)
+
+    def _tool_skyeye_combat(self, payload: Dict[str, Any]) -> str:
+        denied = self._tool_skyeye_require_admin(payload)
+        if denied:
+            return denied
+        core = self._get_arc_core_plugin()
+        if core is None:
+            return "本服未安装弧光核心 arc_core"
+        query_text = getattr(core, "api_sky_eye_query_text", None)
+        if not callable(query_text):
+            return "弧光核心版本过旧，没有天眼查询接口"
+        player_name = str(payload.get("player_name") or "").strip()
+        if not player_name:
+            return "玩家名为空"
+        minutes = self._parse_skyeye_minutes(payload, 30)
+        return query_text(
+            player_name=player_name,
+            minutes=minutes,
+            combat_role="both",
+            heading=f"{player_name} 近 {minutes} 分钟战斗（打了谁 / 被谁打 / 死亡）",
+        )
+
+    def _tool_skyeye_location(self, payload: Dict[str, Any]) -> str:
+        denied = self._tool_skyeye_require_admin(payload)
+        if denied:
+            return denied
+        core = self._get_arc_core_plugin()
+        if core is None:
+            return "本服未安装弧光核心 arc_core"
+        query_text = getattr(core, "api_sky_eye_query_text", None)
+        if not callable(query_text):
+            return "弧光核心版本过旧，没有天眼查询接口"
+        try:
+            x = float(payload.get("x"))
+            y = float(payload.get("y"))
+            z = float(payload.get("z"))
+        except (TypeError, ValueError):
+            return "坐标无效，需要 x/y/z"
+        try:
+            radius = float(payload.get("radius") if payload.get("radius") not in (None, "") else 8)
+        except (TypeError, ValueError):
+            radius = 8.0
+        minutes = self._parse_skyeye_minutes(payload, 30)
+        dimension = str(payload.get("dimension") or "").strip()
+        return query_text(
+            x=x,
+            y=y,
+            z=z,
+            radius=radius,
+            dimension=dimension,
+            minutes=minutes,
+            heading=f"坐标 ({x:.1f},{y:.1f},{z:.1f}) 半径 {radius:.0f} 格近 {minutes} 分钟活动",
+        )
 
     def _ensure_config_folder(self) -> None:
         os.makedirs(self.config_folder, exist_ok=True)
@@ -866,6 +994,13 @@ class ARCAIHelperPlugin(Plugin):
                 "时长单位是分钟，可填 -1 或 无期；不填则用服务器默认一键入狱时长（默认 30 分钟）。"
                 "释放用 mc_release_player，查看在押名单用 mc_list_prisoners。"
                 "入狱和释放只有管理员（OP）下令时才能执行。"
+            )
+        if self._get_arc_core_plugin() is not None:
+            parts.append(
+                "本服已安装弧光核心天眼。查询玩家在哪、近期做了什么、打了谁、被谁打、"
+                "某个坐标附近发生过什么、操作是否在领地内时，必须调用 "
+                "mc_skyeye_player / mc_skyeye_combat / mc_skyeye_location，禁止编造。"
+                "这些工具只有管理员（OP）下令时才能执行。"
             )
         return "\n\n".join(parts)
 
