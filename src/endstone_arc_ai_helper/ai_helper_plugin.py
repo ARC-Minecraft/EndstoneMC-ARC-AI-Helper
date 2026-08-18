@@ -197,7 +197,7 @@ class ARCAIHelperPlugin(Plugin):
         """Execute an AstrBot MC control tool on the game server.
 
         Args:
-            action: ``list`` / ``tps`` / ``info`` / ``cmd``.
+            action: ``list`` / ``tps`` / ``info`` / ``cmd`` / ``jail`` / ``release`` / ``prisoners``.
             args: Extra arguments, including ``command`` / ``is_op``.
 
         Returns:
@@ -219,6 +219,12 @@ class ARCAIHelperPlugin(Plugin):
                         bool(payload.get("is_op", False)),
                     )
                 )
+            elif name == "jail":
+                text = self._run_on_server_thread(lambda: self._tool_jail_player(payload))
+            elif name == "release":
+                text = self._run_on_server_thread(lambda: self._tool_release_player(payload))
+            elif name in ("prisoners", "list_prisoners"):
+                text = self._run_on_server_thread(self._tool_list_prisoners)
             else:
                 return {"ok": False, "error": f"未知工具动作: {action}"}
             return {"ok": True, "text": str(text or "").strip() or "（无返回）"}
@@ -358,6 +364,84 @@ class ARCAIHelperPlugin(Plugin):
         output_text = "\n".join(lines) if lines else "无返回值"
         status = "成功" if success else "失败, 请检查命令语法或权限"
         return f"命令已执行: /{normalized}\n状态: {status}\n输出:\n{output_text}"
+
+    def _get_prison_plugin(self):
+        plugin_manager = getattr(self.server, "plugin_manager", None)
+        if plugin_manager is None:
+            return None
+        try:
+            return plugin_manager.get_plugin("arc_prison")
+        except Exception:
+            return None
+
+    def _tool_jail_player(self, payload: Dict[str, Any]) -> str:
+        if not bool(payload.get("is_op", False)):
+            return "没有权限：入狱仅管理员（OP）或 QQ 群管理可以下令。"
+        prison = self._get_prison_plugin()
+        if prison is None:
+            return "本服未安装监狱插件 arc_prison"
+        api_quick_jail = getattr(prison, "api_quick_jail", None)
+        if not callable(api_quick_jail):
+            return "监狱插件版本过旧，没有一键入狱接口"
+        player_name = str(payload.get("player_name") or "").strip()
+        if not player_name:
+            return "玩家名为空"
+        duration_raw = str(payload.get("duration") or payload.get("minutes") or "").strip()
+        reason = str(payload.get("reason") or "").strip()
+        assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
+        result = api_quick_jail(
+            player_name,
+            duration_text=duration_raw,
+            reason=reason,
+            jailed_by=assistant_name,
+            announce=True,
+        )
+        if not isinstance(result, dict):
+            return "监狱插件返回格式异常"
+        if result.get("ok"):
+            return str(result.get("text") or "关押成功")
+        return str(result.get("error") or "关押失败")
+
+    def _tool_release_player(self, payload: Dict[str, Any]) -> str:
+        if not bool(payload.get("is_op", False)):
+            return "没有权限：释放仅管理员（OP）或 QQ 群管理可以下令。"
+        prison = self._get_prison_plugin()
+        if prison is None:
+            return "本服未安装监狱插件 arc_prison"
+        api_quick_release = getattr(prison, "api_quick_release", None)
+        if not callable(api_quick_release):
+            return "监狱插件版本过旧，没有一键释放接口"
+        player_name = str(payload.get("player_name") or "").strip()
+        if not player_name:
+            return "玩家名为空"
+        result = api_quick_release(player_name, announce=True)
+        if not isinstance(result, dict):
+            return "监狱插件返回格式异常"
+        if result.get("ok"):
+            return str(result.get("text") or "释放成功")
+        return str(result.get("error") or "释放失败")
+
+    def _tool_list_prisoners(self) -> str:
+        prison = self._get_prison_plugin()
+        if prison is None:
+            return "本服未安装监狱插件 arc_prison"
+        formatter = getattr(prison, "api_format_prisoners_text", None)
+        if callable(formatter):
+            return str(formatter() or "当前没有在押玩家")
+        listing = getattr(prison, "api_get_all_imprisoned_players", None)
+        if not callable(listing):
+            return "监狱插件没有在押查询接口"
+        prisoners = listing() or []
+        if not prisoners:
+            return "当前没有玩家在监狱中"
+        lines = [f"当前在押 {len(prisoners)} 人:"]
+        for item in prisoners:
+            name = item.get("player_name") or "?"
+            reason = item.get("reason") or "未指定原因"
+            remain = "无期徒刑" if item.get("is_life_sentence") else f"{item.get('remaining_minutes', 0)} 分钟"
+            online = "在线" if item.get("is_online") else "离线"
+            lines.append(f"• {name}  剩余:{remain}  原因:{reason}  [{online}]")
+        return "\n".join(lines)
 
     def _ensure_config_folder(self) -> None:
         os.makedirs(self.config_folder, exist_ok=True)
@@ -774,6 +858,14 @@ class ARCAIHelperPlugin(Plugin):
         if newbie_guide_text:
             parts.append(
                 "【新手引导（来自 arc_core 的 newbie_welcome.txt）】\n" + newbie_guide_text
+            )
+        if self._get_prison_plugin() is not None:
+            parts.append(
+                "本服已安装监狱插件。要把玩家关进监狱时必须调用工具 mc_jail_player，"
+                "不要用 mc_run_command 去执行 /jail。"
+                "时长单位是分钟，可填 -1 或 无期；不填则用服务器默认一键入狱时长（默认 30 分钟）。"
+                "释放用 mc_release_player，查看在押名单用 mc_list_prisoners。"
+                "入狱和释放只有管理员（OP）下令时才能执行。"
             )
         return "\n\n".join(parts)
 
