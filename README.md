@@ -59,6 +59,24 @@
 3. 连接成功后日志会出现：`对话走 AstrBot 人格/记忆`。
 4. 中枢连不上或版本过旧时，自动退回 `persona.txt` + `providers.json`。
 
+工具由中枢挂给大模型，本插件在游戏服上执行。完整参数表见 [AstrBot-ARC-EndStoneMC-Hub README](https://github.com/ARC-Minecraft/AstrBot-ARC-EndStoneMC-Hub#mc-ai-工具参数一览)。对照如下（`event` 不是模型参数）：
+
+| 工具 | 权限 | 参数 | 必填 | 默认 | 含义 |
+|------|------|------|------|------|------|
+| `mc_list_servers` | 已激活即可 | `reason` | 是 | | 为何查询 |
+| `mc_list_players` | 已激活即可 | `reason`, `server` | `reason` 是；`server` 多开服要填 | `server` 空 | 在线名单 |
+| `mc_get_tps` | 已激活即可 | `reason`, `server` | 同上 | `server` 空 | TPS / MSPT |
+| `mc_server_info` | 已激活即可 | `reason`, `server` | 同上 | `server` 空 | 名称 / 版本 / 在线 / 运行时长 |
+| `mc_run_command` | 管理员；或已绑定用户仅限本人自救 | `command`, `server` | `command` 是 | `server` 空 | 不含 `/` 的控制台指令。禁 `stop`/`kill` |
+| `mc_jail_player` | 仅管理员 | `player_name`, `duration`, `reason`, `server` | 仅 `player_name` | `duration`/`reason`/`server` 空 | `duration` 为分钟，`-1`/`无期` 为无期 |
+| `mc_release_player` | 仅管理员 | `player_name`, `server` | `player_name` | `server` 空 | 释放在押玩家 |
+| `mc_list_prisoners` | 已激活即可 | `reason`, `server` | `reason` 是 | `server` 空 | 当前在押名单 |
+| `mc_skyeye_player` | 仅管理员 | `player_name`, `minutes`, `action`, `server` | `player_name` | `minutes=30`，其余空 | 位置与近期行为。**不要求在线**。`minutes` 由模型换算（一天=`1440`）。`server` 建议留空搜全服 |
+| `mc_skyeye_combat` | 仅管理员 | `player_name`, `minutes`, `server` | `player_name` | `minutes=30` | 打架 / 被打 / 死亡。`server` 建议留空搜全服 |
+| `mc_skyeye_location` | 仅管理员 | `x`, `y`, `z`, `radius`, `dimension`, `minutes`, `server` | `x`/`y`/`z` | `radius=8`，`minutes=30` | 坐标附近活动。`server` 建议留空搜全服 |
+
+游戏内调用时 `server` 可留空（本服执行）。QQ 侧须先 `/mc activate`。
+
 ### 配置文件说明
 
 插件第一次成功加载后，会在插件数据目录下（`self.data_folder`）生成以下文件：
@@ -162,7 +180,7 @@
 
 ### 更新日志
 
-- **1.2.7**：天眼 `minutes` 支持「一天」等中文时长；能力提示改为不要求玩家在线，server 留空由中枢搜全部服。需中枢 ≥ 1.6.13。
+- **1.2.7**：天眼能力提示改为不要求玩家在线；`minutes` 由大模型按用户说法换算成分钟传入。需中枢 ≥ 1.6.13（`server` 留空会搜全部服）。
 - **1.2.6**：QQ 群求助自救：已绑定用户经 AstrBot 可对本人角色执行 tp / effect / spawnpoint 等安全指令；未绑定用户无权调用。需中枢 ≥ 1.6.9。
 - **1.2.5**：对接弧光核心天眼查询：`mc_skyeye_player` / `mc_skyeye_combat` / `mc_skyeye_location`（仅管理员）。需核心 ≥ 0.8.8。
 - **1.2.4**：对接监狱插件一键入狱：AstrBot 工具 `mc_jail_player` / `mc_release_player` / `mc_list_prisoners`；本服装了 arc_prison 时才会写入能力提示。
