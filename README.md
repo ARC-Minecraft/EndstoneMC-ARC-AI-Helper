@@ -63,14 +63,14 @@
 
 | 工具 | 权限 | 参数 | 必填 | 默认 | 含义 |
 |------|------|------|------|------|------|
-| `mc_list_servers` | 已激活即可 | `reason` | 是 | | 为何查询 |
-| `mc_list_players` | 已激活即可 | `reason`, `server` | `reason` 是；`server` 多开服要填 | `server` 空 | 在线名单 |
-| `mc_get_tps` | 已激活即可 | `reason`, `server` | 同上 | `server` 空 | TPS / MSPT |
-| `mc_server_info` | 已激活即可 | `reason`, `server` | 同上 | `server` 空 | 名称 / 版本 / 在线 / 运行时长 |
+| `mc_list_servers` | 已激活即可 | （无） | | | 列出已连接 Helper 服 |
+| `mc_list_players` | 已激活即可 | `server` | 多开服时要填 | 空 | 在线名单 |
+| `mc_get_tps` | 已激活即可 | `server` | 多开服时要填 | 空 | TPS / MSPT |
+| `mc_server_info` | 已激活即可 | `server` | 多开服时要填 | 空 | 名称 / 版本 / 在线 / 运行时长 |
 | `mc_run_command` | 管理员；或已绑定用户仅限本人自救 | `command`, `server` | `command` 是 | `server` 空 | 不含 `/` 的控制台指令。禁 `stop`/`kill` |
-| `mc_jail_player` | 仅管理员 | `player_name`, `duration`, `reason`, `server` | 仅 `player_name` | `duration`/`reason`/`server` 空 | `duration` 为分钟，`-1`/`无期` 为无期 |
+| `mc_jail_player` | 仅管理员 | `player_name`, `minutes`, `reason`, `server` | 仅 `player_name` | `minutes`/`reason`/`server` 空 | `minutes` 为刑期分钟，`-1`/`无期` 为无期；`reason` 写入监狱插件 |
 | `mc_release_player` | 仅管理员 | `player_name`, `server` | `player_name` | `server` 空 | 释放在押玩家 |
-| `mc_list_prisoners` | 已激活即可 | `reason`, `server` | `reason` 是 | `server` 空 | 当前在押名单 |
+| `mc_list_prisoners` | 已激活即可 | `server` | 多开服时要填 | 空 | 当前在押名单 |
 | `mc_skyeye_player` | 仅管理员 | `player_name`, `minutes`, `action`, `server` | `player_name` | `minutes=30`，其余空 | 位置与近期行为。**不要求在线**。`minutes` 由模型换算（一天=`1440`）。`server` 建议留空搜全服 |
 | `mc_skyeye_combat` | 仅管理员 | `player_name`, `minutes`, `server` | `player_name` | `minutes=30` | 打架 / 被打 / 死亡。`server` 建议留空搜全服 |
 | `mc_skyeye_location` | 仅管理员 | `x`, `y`, `z`, `radius`, `dimension`, `minutes`, `server` | `x`/`y`/`z` | `radius=8`，`minutes=30` | 坐标附近活动。`server` 建议留空搜全服 |
@@ -180,6 +180,7 @@
 
 ### 更新日志
 
+- **1.2.8**：入狱时长改为 `minutes`（与天眼同一单位）；仍兼容旧字段 `duration`。需中枢 ≥ 1.6.14。
 - **1.2.7**：天眼能力提示改为不要求玩家在线；`minutes` 由大模型按用户说法换算成分钟传入。需中枢 ≥ 1.6.13（`server` 留空会搜全部服）。
 - **1.2.6**：QQ 群求助自救：已绑定用户经 AstrBot 可对本人角色执行 tp / effect / spawnpoint 等安全指令；未绑定用户无权调用。需中枢 ≥ 1.6.9。
 - **1.2.5**：对接弧光核心天眼查询：`mc_skyeye_player` / `mc_skyeye_combat` / `mc_skyeye_location`（仅管理员）。需核心 ≥ 0.8.8。

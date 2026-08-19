@@ -405,7 +405,7 @@ class ARCAIHelperPlugin(Plugin):
         player_name = str(payload.get("player_name") or "").strip()
         if not player_name:
             return "玩家名为空"
-        duration_raw = str(payload.get("duration") or payload.get("minutes") or "").strip()
+        duration_raw = str(payload.get("minutes") or payload.get("duration") or "").strip()
         reason = str(payload.get("reason") or "").strip()
         assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
         result = api_quick_jail(
@@ -1024,7 +1024,8 @@ class ARCAIHelperPlugin(Plugin):
             parts.append(
                 "本服已安装监狱插件。要把玩家关进监狱时必须调用工具 mc_jail_player，"
                 "不要用 mc_run_command 去执行 /jail。"
-                "时长单位是分钟，可填 -1 或 无期；不填则用服务器默认一键入狱时长（默认 30 分钟）。"
+                "时长用 minutes，单位是分钟；可填 -1 或 无期；不填则用服务器默认一键入狱时长（默认 30 分钟）。"
+                "reason 是入狱原因，会写入监狱插件，可留空。"
                 "释放用 mc_release_player，查看在押名单用 mc_list_prisoners。"
                 "入狱和释放只有管理员（OP）下令时才能执行。"
             )
@@ -1034,7 +1035,7 @@ class ARCAIHelperPlugin(Plugin):
                 "某个坐标附近发生过什么、操作是否在领地内时，必须调用 "
                 "mc_skyeye_player / mc_skyeye_combat / mc_skyeye_location，禁止编造。"
                 "不要求该玩家当前在线。不知道在哪台服时 server 留空，中枢会搜索全部已连接服务器。"
-                "查一天把 minutes 设为 1440 或「一天」，不要用默认 30 分钟。"
+                "调用天眼时必须自己把用户说的时长换算成分钟写入 minutes，例如一天=1440、一小时=60。"
                 "这些工具只有管理员（OP）下令时才能执行。"
             )
         return "\n\n".join(parts)
