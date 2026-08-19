@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 from requests.exceptions import Timeout as RequestsTimeout
@@ -93,32 +93,44 @@ class ChatAIManager:
 
         return {"http": proxy_text, "https": proxy_text}
 
-    def chat(self, messages: List[Dict[str, str]]) -> Tuple[bool, str]:
+    def _post_chat_completions(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]] | None = None,
+        stick_to: Optional[Tuple[Dict[str, Any], str, str]] = None,
+    ) -> Tuple[bool, Any]:
+        """POST /chat/completions. Returns (ok, message_dict_or_error_str)."""
         max_rounds = self._max_timeout_retry_rounds()
         last_error = ""
+        fixed = stick_to
 
         for round_index in range(max_rounds):
-            target = self._get_next_target()
-            if target is None:
-                return False, "未配置可用的AI Provider，请检查providers.json。"
+            if fixed is not None:
+                provider, api_key, model = fixed
+            else:
+                target = self._get_next_target()
+                if target is None:
+                    return False, "未配置可用的AI Provider，请检查providers.json。"
+                provider, api_key, model = target
+                fixed = target
 
-            provider, api_key, model = target
             base_url = str(provider.get("base_url") or "").rstrip("/")
             timeout = int(provider.get("timeout", 60))
             proxies = self._build_proxies(provider)
-
             url = f"{base_url}/chat/completions"
-
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             }
-
             body: Dict[str, Any] = {
                 "model": model,
                 "messages": messages,
                 "stream": False,
             }
+            if tools:
+                body["tools"] = tools
+                body["tool_choice"] = "auto"
 
             try:
                 response = self.session.post(
@@ -130,6 +142,7 @@ class ChatAIManager:
                 )
             except RequestsTimeout as error:
                 last_error = f"请求AI服务超时: {error}"
+                fixed = None
                 if round_index + 1 >= max_rounds:
                     return False, last_error
                 continue
@@ -145,6 +158,10 @@ class ChatAIManager:
                 except Exception:
                     error_message = response.text
 
+                # Some providers reject tools; caller may retry without them.
+                if tools and response.status_code in (400, 404, 422):
+                    return False, f"TOOL_UNSUPPORTED:{error_message}"
+
                 if self._should_retry_after_http_error(
                     response.status_code
                 ) and round_index + 1 < max_rounds:
@@ -152,6 +169,7 @@ class ChatAIManager:
                         f"AI服务暂时不可用({response.status_code})，已切换模型重试。"
                         f" 详情: {error_message}"
                     )
+                    fixed = None
                     continue
 
                 return False, f"AI服务返回错误: {error_message}"
@@ -161,10 +179,8 @@ class ChatAIManager:
                 choices = data.get("choices") or []
                 if not choices:
                     return False, "AI服务未返回结果。"
-
                 message = choices[0].get("message") or {}
-                content = message.get("content") or ""
-                return True, str(content)
+                return True, message
             except Exception as error:
                 return False, f"解析AI响应失败: {error}"
 
@@ -172,3 +188,96 @@ class ChatAIManager:
             return False, last_error
         return False, "AI服务多次超时或不可用，请稍后再试或检查providers.json中的模型列表。"
 
+    def chat(self, messages: List[Dict[str, str]]) -> Tuple[bool, str]:
+        ok, payload = self._post_chat_completions(messages=list(messages), tools=None)
+        if not ok:
+            return False, str(payload)
+        content = (payload or {}).get("content") or ""
+        return True, str(content)
+
+    def chat_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        execute_tool: Callable[[str, Dict[str, Any]], str],
+        *,
+        max_tool_rounds: int = 8,
+    ) -> Tuple[bool, str]:
+        """Agent loop: call model → run tool_calls → feed results → until text reply.
+
+        Args:
+            messages: OpenAI-style message list (may grow with tool turns).
+            tools: OpenAI tools definitions.
+            execute_tool: ``(tool_name, args) -> result_text``.
+            max_tool_rounds: Cap on tool-call iterations.
+
+        Returns:
+            ``(ok, reply_text)``.
+        """
+        working = [dict(item) for item in messages]
+        tool_list = list(tools or [])
+        use_tools = bool(tool_list)
+
+        for _ in range(max(1, int(max_tool_rounds))):
+            ok, payload = self._post_chat_completions(
+                messages=working,
+                tools=tool_list if use_tools else None,
+            )
+            if not ok:
+                err = str(payload)
+                if use_tools and err.startswith("TOOL_UNSUPPORTED:"):
+                    use_tools = False
+                    ok, payload = self._post_chat_completions(
+                        messages=working,
+                        tools=None,
+                    )
+                    if not ok:
+                        return False, str(payload)
+                else:
+                    return False, err
+
+            message = payload if isinstance(payload, dict) else {}
+            tool_calls = message.get("tool_calls") or []
+            content = message.get("content")
+
+            if tool_calls and use_tools:
+                assistant_msg: Dict[str, Any] = {
+                    "role": "assistant",
+                    "content": content if content is not None else "",
+                    "tool_calls": tool_calls,
+                }
+                working.append(assistant_msg)
+                for call in tool_calls:
+                    call_id = str(call.get("id") or "")
+                    fn = call.get("function") or {}
+                    tool_name = str(fn.get("name") or "").strip()
+                    raw_args = fn.get("arguments") or "{}"
+                    try:
+                        if isinstance(raw_args, dict):
+                            args = raw_args
+                        else:
+                            args = json.loads(raw_args) if str(raw_args).strip() else {}
+                        if not isinstance(args, dict):
+                            args = {}
+                    except Exception:
+                        args = {}
+                    try:
+                        result_text = execute_tool(tool_name, args)
+                    except Exception as error:
+                        result_text = f"工具执行失败: {error}"
+                    working.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "name": tool_name,
+                            "content": str(result_text or "（无返回）"),
+                        }
+                    )
+                continue
+
+            text = str(content or "").strip()
+            if text:
+                return True, text
+            return False, "AI 未返回文本内容。"
+
+        return False, "工具调用轮次过多，已中止。请简化请求后重试。"

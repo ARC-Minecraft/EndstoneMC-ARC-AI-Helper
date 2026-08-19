@@ -25,31 +25,33 @@ from .ai_permission import (
     validate_command_for_level,
 )
 from .astrbot_hub_client import AstrBotHubChatClient
-from .bound_self_help import validate_bound_self_help_command
 from .chat_ai_manager import ChatAIManager
+from .local_agent_tools import build_local_agent_tools, resolve_tool_action
 
 
 DEFAULT_PERSONA = (
-    "你是Minecraft服务器中的AI助手“天星”，需要用友好、简洁的中文回答玩家的问题，"
-    "并尽量结合游戏内的背景来解释。"
+    "你是Minecraft服务器中的弧光Agent「天星」，负责协助管理与服务本服玩家。"
+    "请用友好、简洁的中文回答，并结合游戏内背景解释。"
 )
 
 DEFAULT_SYSTEM_PROMPT = (
-    "你运行在 Minecraft 基岩版服务器中，所有回复都会直接显示在游戏聊天栏。"
+    "你运行在 Minecraft 基岩版服务器中，是本服的弧光Agent（不只是聊天助手）。"
+    "所有回复都会直接显示在游戏聊天栏。"
     "请使用 Minecraft 的颜色代码和格式代码来美化消息，而不要使用 Markdown 或其他标记语言。"
     "常用颜色代码示例: §0黑色, §1深蓝, §2深绿, §3深青, §4深红, §5深紫, §6金色, §7灰色, "
     "§8深灰, §9蓝色, §a绿色, §b青色, §c红色, §d淡紫, §e黄色, §f白色。"
     "常用格式代码示例: §l粗体, §n下划线, §o斜体, §k随机字符, §m删除线, §r重置格式。"
     "需要改游戏世界（劈闪电、给效果、传送、给予物品等）时，必须调用工具 mc_run_command，"
     "command 参数不要带开头斜杠。"
+    "本机 Agent 模式已挂载与 AstrBot 相同的工具；优先用 function/tool 调用，"
     "只有工具不可用时，才在回复里写 [execution_command:实际游戏指令]。"
     "effect 只能用于药水效果，例如: effect Steve slowness 20 0 true 或 "
     "effect Steve night_vision 30 0 true。"
     "劈闪电必须用: execute at 玩家名 run summon lightning_bolt ~ ~ ~"
     "禁止写成: effect 玩家名 summon ...（summon 不是药水效果，会报 Unknown effect）。"
     "也不要把 execute / summon / give / tp 塞进 effect 通道。"
-    "对非 OP 玩家：仅当对方遇到困难或有正当理由时，才给短时间增益；惩罚性雷击/负面效果不要滥用。"
-    "对 OP 玩家：对方明确要求且合理时可以执行。"
+    "对非管理员玩家：仅当对方遇到困难或有正当理由时，才给短时间增益；惩罚性雷击/负面效果不要滥用。"
+    "对管理员及以上：对方明确要求且合理时可以执行。"
     "常见效果名称："
     "absorption, blindness, darkness, fire_resistance, haste, instant_damage, instant_health, "
     "invisibility, jump_boost, levitation, mining_fatigue, nausea, night_vision, poison, "
@@ -68,7 +70,7 @@ class ARCAIHelperPlugin(Plugin):
 
     commands = {
         "ai": {
-            "description": "打开与AI助手的聊天面板",
+            "description": "打开与弧光Agent的聊天面板",
             "usages": ["/ai"],
             "permissions": ["arc_ai_helper.command.ai"],
         }
@@ -76,19 +78,19 @@ class ARCAIHelperPlugin(Plugin):
 
     permissions = {
         "arc_ai_helper.command.ai": {
-            "description": "允许使用AI助手聊天功能",
+            "description": "允许使用弧光Agent聊天功能",
             "default": True,
         },
         "arc_ai_helper.permission.assistant": {
-            "description": "AI助手权限：助手级别（tp/give/effect 等基础指令）",
+            "description": "弧光Agent权限：助手级别（tp/give/effect 等基础指令）",
             "default": True,
         },
         "arc_ai_helper.permission.admin": {
-            "description": "AI助手权限：管理员级别（等同 OP，不含权限/敏感指令）",
+            "description": "弧光Agent权限：管理员级别（等同 OP，不含权限/敏感指令）",
             "default": False,
         },
         "arc_ai_helper.permission.proxy_owner": {
-            "description": "AI助手权限：代理服主级别（全部指令）",
+            "description": "弧光Agent权限：代理服主级别（全部指令）",
             "default": False,
         },
     }
@@ -243,6 +245,8 @@ class ARCAIHelperPlugin(Plugin):
         """
         payload = args if isinstance(args, dict) else {}
         name = str(action or "").strip().lower()
+        if name.startswith("mc_"):
+            name = resolve_tool_action(name)
         try:
             if name == "list":
                 text = self._run_on_server_thread(self._tool_list_players)
@@ -836,11 +840,11 @@ class ARCAIHelperPlugin(Plugin):
                 "contain_triggers": ["请问", "吗", "?", "？"],
                 "max_history_messages": 20,
                 "max_queue_size": 10,
-                "assistant_title": "AI助手",
+                "assistant_title": "弧光Agent",
                 "assistant_name": "弧光天星",
-                "gui_greet_message": "你好，我是弧光天星服务器小助理，请问有什么可以帮助您的？",
-                "welcome_message": "欢迎来到弧光大陆服务器，我是人工智能助手弧光天星，需要我的话喊我的名字天星就可以啦",
-                "death_tip_message": "遇到困难了吗？有问题可以问我哦~喊我的名字天星我就来帮助你啦！",
+                "gui_greet_message": "你好，我是本服弧光Agent天星，需要查服、传传送、管领地或银行都可以找我。",
+                "welcome_message": "欢迎来到弧光大陆服务器，我是服务器弧光Agent天星，喊我的名字天星就可以啦",
+                "death_tip_message": "遇到困难了吗？喊我的名字天星，我可以帮你传送或处理问题！",
                 "hub_host": "127.0.0.1",
                 "hub_port": 19136,
                 "hub_token": "",
@@ -849,6 +853,7 @@ class ARCAIHelperPlugin(Plugin):
                 "default_permission_level": "assistant",
                 "op_maps_to_admin": True,
                 "permission_overrides": {},
+                "local_agent_max_tool_rounds": 8,
             }
             with open(self.chat_config_path, "w", encoding="utf-8") as file:
                 json.dump(default_chat_config, file, ensure_ascii=False, indent=2)
@@ -889,17 +894,17 @@ class ARCAIHelperPlugin(Plugin):
         data.setdefault("contain_triggers", ["请问", "吗", "?", "？"])
         data.setdefault("max_history_messages", 20)
         data.setdefault("max_queue_size", 10)
-        data.setdefault("assistant_title", "AI助手")
+        data.setdefault("assistant_title", "弧光Agent")
         data.setdefault("assistant_name", "弧光天星")
         data.setdefault(
             "gui_greet_message",
-            "你好，我是弧光天星服务器小助理，请问有什么可以帮助您的？",
+            "你好，我是本服弧光Agent天星，需要查服、传传送、管领地或银行都可以找我。",
         )
         data.setdefault(
             "welcome_message",
-            "欢迎来到弧光大陆服务器，我是人工智能助手弧光天星，需要找我的话喊我的名字天星就可以啦",
+            "欢迎来到弧光大陆服务器，我是服务器弧光Agent天星，喊我的名字天星就可以啦",
         )
-        data.setdefault("death_tip_message", "遇到困难了吗？有问题可以问我哦~喊我的名字天星我就来帮助你啦！")
+        data.setdefault("death_tip_message", "遇到困难了吗？喊我的名字天星，我可以帮你传送或处理问题！")
         data.setdefault("hub_host", "127.0.0.1")
         data.setdefault("hub_port", 19136)
         data.setdefault("hub_token", "")
@@ -908,6 +913,7 @@ class ARCAIHelperPlugin(Plugin):
         data.setdefault("default_permission_level", "assistant")
         data.setdefault("op_maps_to_admin", True)
         data.setdefault("permission_overrides", {})
+        data.setdefault("local_agent_max_tool_rounds", 8)
 
         try:
             max_history = int(data.get("max_history_messages", 20))
@@ -1157,7 +1163,32 @@ class ARCAIHelperPlugin(Plugin):
             return False, "未连接弧光消息中心，且未配置本机 AI Provider。"
         with self.history_lock:
             messages = self._build_messages_for_player(player_name, user_text, level)
-        return self.ai_manager.chat(messages)
+        tools = build_local_agent_tools(
+            has_prison=self._get_prison_plugin() is not None,
+            has_arc_core=self._get_arc_core_plugin() is not None,
+        )
+        level_value = int(level)
+        is_admin = level >= AIPermissionLevel.ADMIN
+
+        def _execute_local_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
+            args = dict(tool_args or {})
+            args.setdefault("is_op", is_admin)
+            args.setdefault("permission_level", level_value)
+            result = self.run_ai_tool(tool_name, args)
+            if result.get("ok"):
+                return str(result.get("text") or "（无返回）")
+            return str(result.get("error") or "工具执行失败")
+
+        try:
+            max_rounds = int(self.chat_config.get("local_agent_max_tool_rounds", 8))
+        except Exception:
+            max_rounds = 8
+        return self.ai_manager.chat_with_tools(
+            messages,
+            tools,
+            _execute_local_tool,
+            max_tool_rounds=max(1, max_rounds),
+        )
 
     def _process_gui_job(
         self,
@@ -1267,6 +1298,10 @@ class ARCAIHelperPlugin(Plugin):
         base_prompt = (self.system_prompt or "").strip()
         if base_prompt:
             parts.append(base_prompt)
+        parts.append(
+            "【弧光Agent】无论是否连接 AstrBot，都应优先通过工具完成查服、执行指令、"
+            "银行/领地/传送/天眼/监狱等操作；不要编造工具本可查询的数据。"
+        )
         newbie_guide_text = self._get_arc_core_newbie_guide_text()
         if newbie_guide_text:
             parts.append(
@@ -1416,7 +1451,7 @@ class ARCAIHelperPlugin(Plugin):
         return False
 
     def _format_assistant_header(self) -> str:
-        assistant_title = str(self.chat_config.get("assistant_title") or "AI助手")
+        assistant_title = str(self.chat_config.get("assistant_title") or "弧光Agent")
         assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
 
         now = datetime.now()
@@ -1428,7 +1463,7 @@ class ARCAIHelperPlugin(Plugin):
         if not history:
             greet = str(
                 self.chat_config.get("gui_greet_message")
-                or "你好，我是弧光天星服务器小助理，请问有什么可以帮助您的？"
+                or "你好，我是本服弧光Agent天星，需要查服、传传送、管领地或银行都可以找我。"
             )
             return greet
 
@@ -1452,7 +1487,7 @@ class ARCAIHelperPlugin(Plugin):
 
         history_label = Label(text=chat_history_text)
         input_box = TextInput(
-            label="输入要发送给AI助手的内容：",
+            label="输入要发送给弧光Agent的内容：",
             placeholder="在这里输入你的问题或想说的话",
             default_value="",
         )
@@ -1507,7 +1542,7 @@ class ARCAIHelperPlugin(Plugin):
                 sender.send_message(f"§7{assistant_tag} 已收到请求，正在排队处理中（第 {position} 位）。")
 
         form = ModalForm(
-            title="与AI助手聊天",
+            title="与弧光Agent聊天",
             controls=[history_label, input_box],
             on_submit=handle_submit,
             on_close=lambda s: None,
@@ -1589,7 +1624,7 @@ class ARCAIHelperPlugin(Plugin):
 
         welcome_message = str(
             self.chat_config.get("welcome_message")
-            or "欢迎来到弧光大陆服务器，我是人工智能助手弧光天星，需要找我的话喊我的名字天星就可以啦"
+            or "欢迎来到弧光大陆服务器，我是服务器弧光Agent天星，喊我的名字天星就可以啦"
         ).strip()
         if not welcome_message:
             return
@@ -1605,7 +1640,7 @@ class ARCAIHelperPlugin(Plugin):
 
         tip_message = str(
             self.chat_config.get("death_tip_message")
-            or "遇到困难了吗？有问题可以问我哦~喊我的名字天星我就来帮助你啦！"
+            or "遇到困难了吗？喊我的名字天星，我可以帮你传送或处理问题！"
         ).strip()
         if not tip_message:
             return

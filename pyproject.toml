@@ -4,18 +4,18 @@ build-backend = "hatchling.build"
 
 [project]
 name = "endstone_arc_ai_helper"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = ["requests>=2.25.0", "websockets>=12.0"]
 authors = [
     { name = "DEVILENMO", email = "DEVILENMO@gmail.com" },
 ]
-description = "AI Helper plugin for Endstone - chat-based assistant that talks with players."
+description = "ARC Agent for Endstone — in-game AI agent with tools (AstrBot or local providers)."
 readme = "README.md"
 license = { file = "LICENSE" }
-keywords = ["endstone", "plugin", "ai", "assistant", "chat", "openai"]
+keywords = ["endstone", "plugin", "ai", "agent", "assistant", "chat", "openai"]
 
 [project.urls]
-Homepage = "https://github.com/EndstoneMC/python-example-plugin"
+Homepage = "https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper"
 
 [project.entry-points."endstone"]
 arc_ai_helper = "endstone_arc_ai_helper.ai_helper_plugin:ARCAIHelperPlugin"
