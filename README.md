@@ -162,6 +162,8 @@
 
 ### 更新日志
 
+- **1.2.7**：天眼 `minutes` 支持「一天」等中文时长；能力提示改为不要求玩家在线，server 留空由中枢搜全部服。需中枢 ≥ 1.6.13。
+- **1.2.6**：QQ 群求助自救：已绑定用户经 AstrBot 可对本人角色执行 tp / effect / spawnpoint 等安全指令；未绑定用户无权调用。需中枢 ≥ 1.6.9。
 - **1.2.5**：对接弧光核心天眼查询：`mc_skyeye_player` / `mc_skyeye_combat` / `mc_skyeye_location`（仅管理员）。需核心 ≥ 0.8.8。
 - **1.2.4**：对接监狱插件一键入狱：AstrBot 工具 `mc_jail_player` / `mc_release_player` / `mc_list_prisoners`；本服装了 arc_prison 时才会写入能力提示。
 - **1.2.3**：能力提示改为优先用 `mc_run_command`，并写明劈闪电格式 `execute at 玩家名 run summon lightning_bolt ~ ~ ~`，避免模型把 summon 塞进 effect。

@@ -18,6 +18,7 @@ except ImportError:
     CommandSenderWrapper = None  # type: ignore
 
 from .astrbot_hub_client import AstrBotHubChatClient
+from .bound_self_help import validate_bound_self_help_command
 from .chat_ai_manager import ChatAIManager
 
 
@@ -217,6 +218,8 @@ class ARCAIHelperPlugin(Plugin):
                     lambda: self._tool_run_command(
                         str(payload.get("command") or ""),
                         bool(payload.get("is_op", False)),
+                        str(payload.get("bound_player_name") or ""),
+                        bool(payload.get("is_bound_self_help", False)),
                     )
                 )
             elif name == "jail":
@@ -315,7 +318,13 @@ class ARCAIHelperPlugin(Plugin):
             f"• 在线玩家: {online_count}/{max_players}"
         )
 
-    def _tool_run_command(self, command_to_execute: str, is_op: bool) -> str:
+    def _tool_run_command(
+        self,
+        command_to_execute: str,
+        is_op: bool,
+        bound_player_name: str = "",
+        is_bound_self_help: bool = False,
+    ) -> str:
         command_to_execute = html.unescape(str(command_to_execute or "").strip())
         if not command_to_execute:
             return "命令为空"
@@ -328,6 +337,10 @@ class ARCAIHelperPlugin(Plugin):
             return f"已拦截危险指令: /{normalized}"
         if command_name == "gamemode" and (not is_op):
             return "该指令仅允许 OP 玩家要求时执行，已拦截。"
+        if is_bound_self_help and (not is_op):
+            ok, reason = validate_bound_self_help_command(normalized, bound_player_name)
+            if not ok:
+                return reason or "没有权限：该求助指令不被允许"
 
         msg_ret: List[str] = []
         error_ret: List[str] = []
@@ -464,9 +477,29 @@ class ARCAIHelperPlugin(Plugin):
         return ""
 
     def _parse_skyeye_minutes(self, payload: Dict[str, Any], default: int = 30) -> int:
-        raw = payload.get("minutes")
-        if raw in (None, ""):
+        raw = str(payload.get("minutes") or "").strip().lower().replace(" ", "")
+        if not raw:
             return default
+        named = {
+            "一天": 1440,
+            "1天": 1440,
+            "24小时": 1440,
+            "24h": 1440,
+            "半天": 720,
+            "一小时": 60,
+            "1小时": 60,
+            "1h": 60,
+            "一周": 10080,
+            "7天": 10080,
+        }
+        if raw in named:
+            return max(1, min(named[raw], 24 * 60 * 7))
+        for suffix, multiplier in (("天", 1440), ("日", 1440), ("小时", 60), ("时", 60), ("h", 60)):
+            if raw.endswith(suffix) and raw[: -len(suffix)].isdigit():
+                return max(1, min(int(raw[: -len(suffix)]) * multiplier, 24 * 60 * 7))
+        for suffix in ("分钟", "分", "min", "m"):
+            if raw.endswith(suffix) and raw[: -len(suffix)].isdigit():
+                return max(1, min(int(raw[: -len(suffix)]), 24 * 60 * 7))
         try:
             return max(1, min(int(raw), 24 * 60 * 7))
         except (TypeError, ValueError):
@@ -1000,6 +1033,8 @@ class ARCAIHelperPlugin(Plugin):
                 "本服已安装弧光核心天眼。查询玩家在哪、近期做了什么、打了谁、被谁打、"
                 "某个坐标附近发生过什么、操作是否在领地内时，必须调用 "
                 "mc_skyeye_player / mc_skyeye_combat / mc_skyeye_location，禁止编造。"
+                "不要求该玩家当前在线。不知道在哪台服时 server 留空，中枢会搜索全部已连接服务器。"
+                "查一天把 minutes 设为 1440 或「一天」，不要用默认 30 分钟。"
                 "这些工具只有管理员（OP）下令时才能执行。"
             )
         return "\n\n".join(parts)
