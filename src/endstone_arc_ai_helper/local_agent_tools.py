@@ -12,7 +12,7 @@ TOOL_NAME_TO_ACTION: Dict[str, str] = {
     "mc_run_command": "cmd",
     "mc_economy": "economy",
     "mc_land": "land",
-    "mc_arc_tp": "arc_tp",
+    "mc_landmarks": "landmarks",
     "mc_jail_player": "jail",
     "mc_release_player": "release",
     "mc_list_prisoners": "prisoners",
@@ -103,6 +103,13 @@ def build_local_agent_tools(*, has_prison: bool = False, has_arc_core: bool = Fa
     if has_arc_core:
         tools.extend(
             [
+                _fn(
+                    "mc_landmarks",
+                    "查询本服公开地标：出生点、公共传送点(Warp)、公共领地/功能区。"
+                    "玩家问路标或功能建筑时优先看系统提示里的地标清单；需要最新数据再调用本工具。"
+                    "只读，助手级别也可用。",
+                    {},
+                ),
                 _fn(
                     "mc_economy",
                     "弧光银行：查询或变动余额（管理员及以上）。sub_action=query|change。",

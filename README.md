@@ -1,9 +1,9 @@
 ## EndStone ARC AI Helper（弧光 Agent）
-[![Version](https://img.shields.io/badge/version-v2.1.0-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
+[![Version](https://img.shields.io/badge/version-v2.1.1-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 
-一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.0**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
+一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.1**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
 
 支持：
 
@@ -14,7 +14,7 @@
   - **AstrBot 中枢**：工具由中枢挂载，本插件在游戏服执行
   - **本机 Agent（无需 AstrBot）**：配置 `providers.json` 后，通过 OpenAI 兼容 Function Calling 调用同一套 `mc_*` 工具
 - 人格与系统提示严格分开：`persona.txt` 只用于降级人格，`system_prompt.txt` 只写能力
-- 对接弧光核心：银行、领地、传送、天眼（管理员及以上）
+- 对接弧光核心：银行、领地、传送、天眼（管理员及以上）；**出生点 / Warp / 公共领地**会注入对话上下文，并可用 `mc_landmarks` 刷新
 - 对接监狱插件：一键入狱 / 释放 / 在押名单（管理员及以上）
 
 ### 推荐运行环境
@@ -73,6 +73,7 @@
 | `mc_get_tps` | 已激活即可 | `server` | 多开服时要填 | 空 | TPS / MSPT |
 | `mc_server_info` | 已激活即可 | `server` | 多开服时要填 | 空 | 名称 / 版本 / 在线 / 运行时长 |
 | `mc_run_command` | 按 AI 权限三档（见下） | `command`, `server` | `command` 是 | `server` 空 | 不含 `/` 的控制台指令 |
+| `mc_landmarks` | 已激活即可 | `server` | | 空 | 本服出生点、公共传送点、公共领地/功能区 |
 | `mc_economy` | 管理员及以上 | `player_name`, `sub_action`, `delta`, `server` | `player_name` | `sub_action=query` | 银行余额查询 / 变动（`change` + `delta`） |
 | `mc_land` | 管理员及以上 | `player_name`, `sub_action`, `land_id`, `x/y/z`, `server` | 视操作 | | 领地列表 / 详情 / 坐标解析 |
 | `mc_arc_tp` | 管理员及以上 | `player_name`, `sub_action`, `home_name`, `warp_name`, `x/y/z`, `server` | `player_name` | | 弧光传送：Home / Warp / 坐标 |
@@ -169,10 +170,11 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 
 - 本机 Agent：确认 `providers.json` 的 `base_url`、密钥与模型支持 tools。
 - 有中枢时优先连 `ws://127.0.0.1:19136`（≥ 1.5.0）。
-- 银行 / 领地 / 传送 / 扩展天眼需弧光核心 ≥ **0.8.12**。
+- 银行 / 领地 / 传送 / 扩展天眼需弧光核心 ≥ **0.8.12**；地标清单需 ≥ **0.8.13**。
 
 ### 更新日志
 
+- **2.1.1**：把弧光核心的出生点、公共传送点、公共领地注入系统提示，并新增只读工具 `mc_landmarks`，方便回答地标/功能建筑。需核心 ≥ 0.8.13。
 - **2.1.0（弧光 Agent）**：不接 AstrBot 时，本机 `providers.json` 也可通过 OpenAI Function Calling 调用全部 `mc_*` 工具；产品定位升级为服务器 Agent；默认头衔「弧光Agent」。
 - **2.0.0**：AI 权限三档；对接弧光核心银行、领地、传送 API；Hub 附带 `permission_level`。
 - **1.2.8**：入狱时长改为 `minutes`（与天眼同一单位）；仍兼容旧字段 `duration`。需中枢 ≥ 1.6.14。

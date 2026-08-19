@@ -126,6 +126,8 @@ class ARCAIHelperPlugin(Plugin):
         self.worker_started: bool = False
 
         self._arc_core_newbie_guide_cache: str | None = None
+        self._arc_core_landmarks_cache: str = ""
+        self._arc_core_landmarks_cache_until: float = 0.0
 
     def on_enable(self) -> None:
         self.logger.info("[ARC AI Helper] on_enable called")
@@ -265,6 +267,8 @@ class ARCAIHelperPlugin(Plugin):
                 text = self._run_on_server_thread(lambda: self._tool_arc_economy(payload))
             elif name in ("land", "lands"):
                 text = self._run_on_server_thread(lambda: self._tool_arc_land(payload))
+            elif name in ("landmarks", "landmark", "warps"):
+                text = self._run_on_server_thread(self._tool_arc_landmarks)
             elif name in ("arc_tp", "arc_teleport", "core_tp"):
                 text = self._run_on_server_thread(lambda: self._tool_arc_teleport(payload))
             elif name == "jail":
@@ -764,6 +768,18 @@ class ARCAIHelperPlugin(Plugin):
                 f"（主人 {info.get('owner_name') or info.get('land_owner') or '?'}）"
             )
         return f"未知领地操作: {sub}（可用 list / info / at）"
+
+    def _tool_arc_landmarks(self) -> str:
+        core = self._get_arc_core_plugin()
+        if core is None:
+            return "本服未安装弧光核心 arc_core"
+        getter = getattr(core, "api_get_server_landmarks_text", None)
+        if not callable(getter):
+            return "弧光核心版本过旧，没有地标查询接口（需要 ≥ 0.8.13）"
+        text = str(getter() or "").strip()
+        self._arc_core_landmarks_cache = text
+        self._arc_core_landmarks_cache_until = time.time() + 60
+        return text or "本服暂时没有可列出的出生点、公共传送点或公共领地。"
 
     def _tool_arc_teleport(self, payload: Dict[str, Any]) -> str:
         denied = self._tool_require_admin(payload)
@@ -1292,6 +1308,22 @@ class ARCAIHelperPlugin(Plugin):
             self._arc_core_newbie_guide_cache = text
         return text
 
+    def _get_arc_core_landmarks_text(self) -> str:
+        now = time.time()
+        if self._arc_core_landmarks_cache and now < self._arc_core_landmarks_cache_until:
+            return self._arc_core_landmarks_cache
+        text = ""
+        try:
+            core = self._get_arc_core_plugin()
+            getter = getattr(core, "api_get_server_landmarks_text", None) if core else None
+            if callable(getter):
+                text = str(getter() or "").strip()
+        except Exception:
+            text = ""
+        self._arc_core_landmarks_cache = text
+        self._arc_core_landmarks_cache_until = now + 60
+        return text
+
     def _build_capability_prompt(self) -> str:
         """Capability / policy prompt only. Persona is not included."""
         parts: List[str] = []
@@ -1317,6 +1349,15 @@ class ARCAIHelperPlugin(Plugin):
                 "入狱和释放只有管理员及以上级别可以执行。"
             )
         if self._get_arc_core_plugin() is not None:
+            landmarks_text = self._get_arc_core_landmarks_text()
+            if landmarks_text:
+                parts.append(
+                    "【本服地标（来自弧光核心，会随 Warp/出生点更新）】\n"
+                    + landmarks_text
+                    + "\n玩家问地标、出生点、功能建筑、公共传送点时必须依据以上清单回答，"
+                    "没有的不要编造。需要最新列表时调用 mc_landmarks。"
+                    "把玩家送到某个 Warp 用 mc_arc_tp（sub_action=warp）。"
+                )
             parts.append(
                 "本服已安装弧光核心。查询/变动银行、查询领地、弧光传送系统时分别调用 "
                 "mc_economy / mc_land / mc_arc_tp（sub_action: query|change / list|info|at / home|warp|pos），"
@@ -1326,6 +1367,7 @@ class ARCAIHelperPlugin(Plugin):
                 "不要求该玩家当前在线。不知道在哪台服时 server 留空，中枢会搜索全部已连接服务器。"
                 "调用天眼时必须自己把用户说的时长换算成分钟写入 minutes，例如一天=1440、一小时=60。"
                 "银行、领地、传送、天眼工具只有管理员及以上级别可以执行。"
+                "mc_landmarks 为公开只读，助手级别也可以用。"
             )
         return "\n\n".join(parts)
 

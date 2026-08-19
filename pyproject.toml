@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "endstone_arc_ai_helper"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = ["requests>=2.25.0", "websockets>=12.0"]
 authors = [
     { name = "DEVILENMO", email = "DEVILENMO@gmail.com" },
