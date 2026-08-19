@@ -17,6 +17,13 @@ try:
 except ImportError:
     CommandSenderWrapper = None  # type: ignore
 
+from .ai_permission import (
+    AIPermissionLevel,
+    level_display,
+    require_admin_level,
+    resolve_permission_level,
+    validate_command_for_level,
+)
 from .astrbot_hub_client import AstrBotHubChatClient
 from .bound_self_help import validate_bound_self_help_command
 from .chat_ai_manager import ChatAIManager
@@ -48,8 +55,9 @@ DEFAULT_SYSTEM_PROMPT = (
     "invisibility, jump_boost, levitation, mining_fatigue, nausea, night_vision, poison, "
     "regeneration, resistance, slowness, slow_falling, speed, strength, water_breathing, "
     "weakness, wither。"
-    "禁止 stop、kill。gamemode 仅 OP 明确要求。无法安全判断就不要执行指令。"
-    "用户消息里会带玩家名和是否为 OP，请据此判断。"
+    "禁止 stop、kill。权限分三档：助手（tp/give/effect 等）、管理员（大部分 OP 指令）、"
+    "代理服主（全部指令）。gamemode 等需管理员及以上；ban/op/permission 等仅代理服主。"
+    "用户消息里会带玩家名与 AI 权限级别，请据此判断。"
 )
 
 
@@ -70,7 +78,19 @@ class ARCAIHelperPlugin(Plugin):
         "arc_ai_helper.command.ai": {
             "description": "允许使用AI助手聊天功能",
             "default": True,
-        }
+        },
+        "arc_ai_helper.permission.assistant": {
+            "description": "AI助手权限：助手级别（tp/give/effect 等基础指令）",
+            "default": True,
+        },
+        "arc_ai_helper.permission.admin": {
+            "description": "AI助手权限：管理员级别（等同 OP，不含权限/敏感指令）",
+            "default": False,
+        },
+        "arc_ai_helper.permission.proxy_owner": {
+            "description": "AI助手权限：代理服主级别（全部指令）",
+            "default": False,
+        },
     }
 
     def on_load(self) -> None:
@@ -194,12 +214,29 @@ class ARCAIHelperPlugin(Plugin):
             raise payload
         return payload
 
+    def _resolve_permission_level(
+        self,
+        player=None,
+        payload: Dict[str, Any] | None = None,
+    ) -> AIPermissionLevel:
+        """Resolve AI permission level from player, config, and Hub payload."""
+        data = payload if isinstance(payload, dict) else {}
+        op_maps = bool(self.chat_config.get("op_maps_to_admin", True))
+        return resolve_permission_level(
+            player=player,
+            chat_config=self.chat_config,
+            payload_level=data.get("permission_level"),
+            payload_is_op=bool(data.get("is_op", False)),
+            op_maps_to_admin=op_maps,
+        )
+
     def run_ai_tool(self, action: str, args: Dict[str, Any] | None = None) -> Dict[str, Any]:
         """Execute an AstrBot MC control tool on the game server.
 
         Args:
-            action: ``list`` / ``tps`` / ``info`` / ``cmd`` / ``jail`` / ``release`` / ``prisoners`` / ``skyeye_player`` / ``skyeye_combat`` / ``skyeye_location``.
-            args: Extra arguments, including ``command`` / ``is_op``.
+            action: ``list`` / ``tps`` / ``info`` / ``cmd`` / ``jail`` / ``release`` / ``prisoners`` /
+                ``skyeye_*`` / ``economy`` / ``land`` / ``arc_tp``.
+            args: Extra arguments, including ``command`` / ``is_op`` / ``permission_level``.
 
         Returns:
             JSON-serializable dict with ``ok`` and ``text`` or ``error``.
@@ -217,11 +254,15 @@ class ARCAIHelperPlugin(Plugin):
                 text = self._run_on_server_thread(
                     lambda: self._tool_run_command(
                         str(payload.get("command") or ""),
-                        bool(payload.get("is_op", False)),
-                        str(payload.get("bound_player_name") or ""),
-                        bool(payload.get("is_bound_self_help", False)),
+                        payload,
                     )
                 )
+            elif name in ("economy", "money", "bank"):
+                text = self._run_on_server_thread(lambda: self._tool_arc_economy(payload))
+            elif name in ("land", "lands"):
+                text = self._run_on_server_thread(lambda: self._tool_arc_land(payload))
+            elif name in ("arc_tp", "arc_teleport", "core_tp"):
+                text = self._run_on_server_thread(lambda: self._tool_arc_teleport(payload))
             elif name == "jail":
                 text = self._run_on_server_thread(lambda: self._tool_jail_player(payload))
             elif name == "release":
@@ -321,10 +362,9 @@ class ARCAIHelperPlugin(Plugin):
     def _tool_run_command(
         self,
         command_to_execute: str,
-        is_op: bool,
-        bound_player_name: str = "",
-        is_bound_self_help: bool = False,
+        payload: Dict[str, Any] | None = None,
     ) -> str:
+        data = payload if isinstance(payload, dict) else {}
         command_to_execute = html.unescape(str(command_to_execute or "").strip())
         if not command_to_execute:
             return "命令为空"
@@ -332,15 +372,16 @@ class ARCAIHelperPlugin(Plugin):
         normalized = command_to_execute.lstrip("/").strip()
         if not normalized:
             return "命令为空"
-        command_name = normalized.lower().split(" ", 1)[0]
-        if command_name in ("stop", "kill"):
-            return f"已拦截危险指令: /{normalized}"
-        if command_name == "gamemode" and (not is_op):
-            return "该指令仅允许 OP 玩家要求时执行，已拦截。"
-        if is_bound_self_help and (not is_op):
-            ok, reason = validate_bound_self_help_command(normalized, bound_player_name)
-            if not ok:
-                return reason or "没有权限：该求助指令不被允许"
+
+        level = self._resolve_permission_level(payload=data)
+        ok, reason = validate_command_for_level(
+            normalized,
+            level,
+            bound_player_name=str(data.get("bound_player_name") or ""),
+            is_bound_self_help=bool(data.get("is_bound_self_help", False)),
+        )
+        if not ok:
+            return reason or "没有权限：该指令不被允许"
 
         msg_ret: List[str] = []
         error_ret: List[str] = []
@@ -393,9 +434,14 @@ class ARCAIHelperPlugin(Plugin):
         except Exception:
             return None
 
+    def _tool_require_admin(self, payload: Dict[str, Any]) -> str:
+        level = self._resolve_permission_level(payload=payload)
+        return require_admin_level(level)
+
     def _tool_jail_player(self, payload: Dict[str, Any]) -> str:
-        if not bool(payload.get("is_op", False)):
-            return "没有权限：入狱仅管理员（OP）或 QQ 群管理可以下令。"
+        denied = self._tool_require_admin(payload)
+        if denied:
+            return denied
         prison = self._get_prison_plugin()
         if prison is None:
             return "本服未安装监狱插件 arc_prison"
@@ -422,8 +468,9 @@ class ARCAIHelperPlugin(Plugin):
         return str(result.get("error") or "关押失败")
 
     def _tool_release_player(self, payload: Dict[str, Any]) -> str:
-        if not bool(payload.get("is_op", False)):
-            return "没有权限：释放仅管理员（OP）或 QQ 群管理可以下令。"
+        denied = self._tool_require_admin(payload)
+        if denied:
+            return denied
         prison = self._get_prison_plugin()
         if prison is None:
             return "本服未安装监狱插件 arc_prison"
@@ -472,9 +519,7 @@ class ARCAIHelperPlugin(Plugin):
             return None
 
     def _tool_skyeye_require_admin(self, payload: Dict[str, Any]) -> str:
-        if not bool(payload.get("is_op", False)):
-            return "没有权限：天眼查询仅管理员（OP）或 QQ 群管理可以使用。"
-        return ""
+        return self._tool_require_admin(payload)
 
     def _parse_skyeye_minutes(self, payload: Dict[str, Any], default: int = 30) -> int:
         raw = str(payload.get("minutes") or "").strip().lower().replace(" ", "")
@@ -604,6 +649,183 @@ class ARCAIHelperPlugin(Plugin):
             heading=f"坐标 ({x:.1f},{y:.1f},{z:.1f}) 半径 {radius:.0f} 格近 {minutes} 分钟活动",
         )
 
+    def _tool_arc_economy(self, payload: Dict[str, Any]) -> str:
+        denied = self._tool_require_admin(payload)
+        if denied:
+            return denied
+        core = self._get_arc_core_plugin()
+        if core is None:
+            return "本服未安装弧光核心 arc_core"
+        player_name = str(payload.get("player_name") or "").strip()
+        xuid = str(payload.get("xuid") or "").strip()
+        if not player_name and not xuid:
+            return "需要 player_name 或 xuid"
+        sub = str(payload.get("sub_action") or payload.get("operation") or "query").strip().lower()
+        if sub in ("query", "get", "balance", ""):
+            getter = getattr(core, "api_get_player_money", None)
+            if not callable(getter):
+                return "弧光核心版本过旧，没有银行查询接口"
+            money = getter(player_name=player_name, xuid=xuid)
+            label = player_name or xuid
+            rank_api = getattr(core, "api_get_player_money_rank", None)
+            rank_text = ""
+            if callable(rank_api):
+                rank = rank_api(player_name=player_name, xuid=xuid)
+                if rank:
+                    rank_text = f"  财富排名: 第 {rank} 名"
+            return f"{label} 银行余额: {money:.2f}{rank_text}"
+        if sub in ("change", "adjust", "add", "remove"):
+            delta_raw = payload.get("delta")
+            if delta_raw in (None, ""):
+                delta_raw = payload.get("amount")
+            try:
+                delta = float(delta_raw)
+            except (TypeError, ValueError):
+                return "变动金额无效，需要 delta 或 amount"
+            adjuster = getattr(core, "api_adjust_player_money", None)
+            if not callable(adjuster):
+                return "弧光核心版本过旧，没有银行变动接口"
+            result = adjuster(delta, player_name=player_name, xuid=xuid, notify=True)
+            if not isinstance(result, dict):
+                return "银行接口返回格式异常"
+            if result.get("ok"):
+                label = player_name or result.get("xuid") or xuid
+                return f"{label} 余额已变动 {result.get('delta'):+.2f}，当前 {result.get('money'):.2f}"
+            return str(result.get("error") or "银行变动失败")
+        return f"未知银行操作: {sub}（可用 query / change）"
+
+    def _tool_arc_land(self, payload: Dict[str, Any]) -> str:
+        denied = self._tool_require_admin(payload)
+        if denied:
+            return denied
+        core = self._get_arc_core_plugin()
+        if core is None:
+            return "本服未安装弧光核心 arc_core"
+        sub = str(payload.get("sub_action") or payload.get("operation") or "list").strip().lower()
+        player_name = str(payload.get("player_name") or "").strip()
+        xuid = str(payload.get("xuid") or "").strip()
+        if sub in ("list", "query", ""):
+            if not player_name and not xuid:
+                return "查询领地列表需要 player_name 或 xuid"
+            list_api = getattr(core, "api_get_player_lands", None)
+            if not callable(list_api):
+                return "弧光核心版本过旧，没有领地查询接口"
+            lands = list_api(player_name=player_name, xuid=xuid) or []
+            if not lands:
+                return f"{player_name or xuid} 没有私人领地"
+            lines = [f"{player_name or xuid} 的领地 ({len(lands)} 块):"]
+            for item in lands:
+                if not isinstance(item, dict):
+                    continue
+                lid = item.get("id") or item.get("land_id") or "?"
+                name = item.get("name") or item.get("land_name") or f"#{lid}"
+                dim = item.get("dimension") or "-"
+                lines.append(f"• #{lid} {name}  维度:{dim}")
+            return "\n".join(lines)
+        if sub in ("info", "detail"):
+            try:
+                land_id = int(payload.get("land_id"))
+            except (TypeError, ValueError):
+                return "需要 land_id"
+            info_api = getattr(core, "api_get_land_info", None)
+            if not callable(info_api):
+                return "弧光核心版本过旧，没有领地详情接口"
+            info = info_api(land_id)
+            if not isinstance(info, dict) or not info:
+                return f"未找到领地 #{land_id}"
+            return (
+                f"领地 #{land_id} {info.get('name') or info.get('land_name') or ''}\n"
+                f"• 主人: {info.get('owner_name') or info.get('owner_xuid') or '?'}\n"
+                f"• 维度: {info.get('dimension') or '-'}\n"
+                f"• 范围: ({info.get('min_x')}, {info.get('min_y')}, {info.get('min_z')})"
+                f" ~ ({info.get('max_x')}, {info.get('max_y')}, {info.get('max_z')})"
+            )
+        if sub in ("at", "position", "here"):
+            dimension = str(payload.get("dimension") or "overworld").strip()
+            try:
+                x = float(payload.get("x"))
+                y = float(payload.get("y"))
+                z = float(payload.get("z"))
+            except (TypeError, ValueError):
+                return "坐标无效，需要 x/y/z"
+            resolver = getattr(core, "api_resolve_land_at_position", None)
+            if not callable(resolver):
+                return "弧光核心版本过旧，没有领地位置解析接口"
+            info = resolver(dimension, (x, y, z))
+            if not isinstance(info, dict) or not info.get("land_id"):
+                return f"坐标 ({x:.1f},{y:.1f},{z:.1f}) 不在任何生效领地内"
+            return (
+                f"坐标 ({x:.1f},{y:.1f},{z:.1f}) 位于领地 "
+                f"#{info.get('land_id')} {info.get('land_name') or ''} "
+                f"（主人 {info.get('owner_name') or info.get('land_owner') or '?'}）"
+            )
+        return f"未知领地操作: {sub}（可用 list / info / at）"
+
+    def _tool_arc_teleport(self, payload: Dict[str, Any]) -> str:
+        denied = self._tool_require_admin(payload)
+        if denied:
+            return denied
+        core = self._get_arc_core_plugin()
+        if core is None:
+            return "本服未安装弧光核心 arc_core"
+        player_name = str(payload.get("player_name") or "").strip()
+        if not player_name:
+            return "需要 player_name（被传送的玩家）"
+        player = self.server.get_player(player_name)
+        if player is None:
+            return f"玩家 {player_name} 不在线，无法传送"
+        sub = str(payload.get("sub_action") or payload.get("operation") or "").strip().lower()
+        if sub in ("home", ""):
+            home_name = str(payload.get("home_name") or payload.get("name") or "").strip()
+            if not home_name:
+                list_api = getattr(core, "api_list_player_homes", None)
+                if callable(list_api):
+                    homes = list_api(player_name=player_name) or []
+                    if not homes:
+                        return f"{player_name} 没有 Home 点"
+                    names = ", ".join(str(h.get("name") or h) for h in homes[:10])
+                    return f"{player_name} 的 Home: {names}（请指定 home_name）"
+                return "需要 home_name"
+            tp_home = getattr(core, "api_teleport_player_to_home", None)
+            if not callable(tp_home):
+                return "弧光核心版本过旧，没有 Home 传送接口"
+            ok = tp_home(home_name, player_name=player_name)
+            return f"已传送 {player_name} 到 Home「{home_name}」" if ok else "Home 传送失败"
+        if sub == "warp":
+            warp_name = str(payload.get("warp_name") or payload.get("name") or "").strip()
+            if not warp_name:
+                list_api = getattr(core, "api_list_public_warps", None)
+                if callable(list_api):
+                    warps = list_api() or []
+                    if not warps:
+                        return "服务器没有公共 Warp"
+                    names = ", ".join(str(w.get("name") or w) for w in warps[:10])
+                    return f"公共 Warp: {names}（请指定 warp_name）"
+                return "需要 warp_name"
+            tp_warp = getattr(core, "api_teleport_player_to_warp", None)
+            if not callable(tp_warp):
+                return "弧光核心版本过旧，没有 Warp 传送接口"
+            ok = tp_warp(warp_name, player_name=player_name)
+            return f"已传送 {player_name} 到 Warp「{warp_name}」" if ok else "Warp 传送失败"
+        if sub in ("pos", "position", "coord"):
+            dimension = str(payload.get("dimension") or "overworld").strip()
+            try:
+                x = float(payload.get("x"))
+                y = float(payload.get("y"))
+                z = float(payload.get("z"))
+            except (TypeError, ValueError):
+                return "坐标无效，需要 x/y/z"
+            tp_pos = getattr(core, "api_teleport_player_to", None)
+            if not callable(tp_pos):
+                return "弧光核心版本过旧，没有坐标传送接口"
+            ok = tp_pos(dimension, x, y, z, player_name=player_name)
+            return (
+                f"已传送 {player_name} 到 {dimension} ({x:.1f},{y:.1f},{z:.1f})"
+                if ok
+                else "坐标传送失败"
+            )
+        return "未知传送操作（可用 home / warp / pos）"
+
     def _ensure_config_folder(self) -> None:
         os.makedirs(self.config_folder, exist_ok=True)
 
@@ -624,6 +846,9 @@ class ARCAIHelperPlugin(Plugin):
                 "hub_token": "",
                 "server_name": "",
                 "astrbot_timeout": 180,
+                "default_permission_level": "assistant",
+                "op_maps_to_admin": True,
+                "permission_overrides": {},
             }
             with open(self.chat_config_path, "w", encoding="utf-8") as file:
                 json.dump(default_chat_config, file, ensure_ascii=False, indent=2)
@@ -680,6 +905,9 @@ class ARCAIHelperPlugin(Plugin):
         data.setdefault("hub_token", "")
         data.setdefault("server_name", "")
         data.setdefault("astrbot_timeout", 180)
+        data.setdefault("default_permission_level", "assistant")
+        data.setdefault("op_maps_to_admin", True)
+        data.setdefault("permission_overrides", {})
 
         try:
             max_history = int(data.get("max_history_messages", 20))
@@ -854,13 +1082,18 @@ class ARCAIHelperPlugin(Plugin):
                     player = job.get("player")
                     player_name = str(job.get("player_name") or "")
                     user_content = str(job.get("user_content") or "")
+                    permission_level = job.get("permission_level")
                     is_op = bool(job.get("is_op", False))
                     channel = str(job.get("channel") or job_type or "public")
 
                     if job_type == "gui":
-                        self._process_gui_job(player, player_name, user_content, is_op, channel)
+                        self._process_gui_job(
+                            player, player_name, user_content, permission_level, is_op, channel
+                        )
                     elif job_type == "public":
-                        self._process_public_job(player, player_name, user_content, is_op, channel)
+                        self._process_public_job(
+                            player, player_name, user_content, permission_level, is_op, channel
+                        )
                 except Exception as error:
                     try:
                         player = job.get("player")
@@ -892,11 +1125,18 @@ class ARCAIHelperPlugin(Plugin):
         self,
         player_name: str,
         user_text: str,
+        permission_level: AIPermissionLevel | int | None,
         is_op: bool,
         channel: str,
         player=None,
     ) -> tuple[bool, str]:
         extra_system = self._build_capability_prompt()
+        if permission_level is None:
+            level = self._resolve_permission_level(player=player)
+        elif isinstance(permission_level, AIPermissionLevel):
+            level = permission_level
+        else:
+            level = AIPermissionLevel(int(permission_level))
         if (not self.astrbot_client.is_ready()) and (not self.ai_manager.has_provider()):
             deadline = time.time() + 5
             while time.time() < deadline and not self.astrbot_client.is_ready():
@@ -907,6 +1147,7 @@ class ARCAIHelperPlugin(Plugin):
                 player_xuid=self._player_xuid(player),
                 content=user_text,
                 is_op=is_op,
+                permission_level=level,
                 extra_system_prompt=extra_system,
                 channel=channel,
                 server_name=self.get_game_server_name(),
@@ -915,11 +1156,17 @@ class ARCAIHelperPlugin(Plugin):
         if not self.ai_manager.has_provider():
             return False, "未连接弧光消息中心，且未配置本机 AI Provider。"
         with self.history_lock:
-            messages = self._build_messages_for_player(player_name, user_text, is_op)
+            messages = self._build_messages_for_player(player_name, user_text, level)
         return self.ai_manager.chat(messages)
 
     def _process_gui_job(
-        self, player, player_name: str, user_text: str, is_op: bool, channel: str = "gui"
+        self,
+        player,
+        player_name: str,
+        user_text: str,
+        permission_level: AIPermissionLevel | int | None,
+        is_op: bool,
+        channel: str = "gui",
     ) -> None:
         assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
         assistant_tag = f"[{assistant_name}]"
@@ -931,7 +1178,7 @@ class ARCAIHelperPlugin(Plugin):
             self._append_history_unlocked(player_name, "user", user_text)
 
         success, reply = self._complete_chat(
-            player_name, user_text, is_op, channel or "gui", player=player
+            player_name, user_text, permission_level, is_op, channel or "gui", player=player
         )
         if not success:
             player.send_message(f"§c{assistant_tag} AI对话失败: {reply}")
@@ -948,7 +1195,7 @@ class ARCAIHelperPlugin(Plugin):
         self._open_ai_chat_panel(player)
 
     def _process_public_job(
-        self, player, player_name: str, user_content: str, is_op: bool, channel: str = "public"
+        self, player, player_name: str, user_content: str, permission_level: AIPermissionLevel | int | None, is_op: bool, channel: str = "public"
     ) -> None:
         assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
         assistant_tag = f"[{assistant_name}]"
@@ -960,7 +1207,12 @@ class ARCAIHelperPlugin(Plugin):
             self._append_public_history_unlocked(player_name, "user", user_content)
 
         success, reply = self._complete_chat(
-            player_name, user_content, is_op, channel or "public", player=player
+            player_name,
+            user_content,
+            permission_level,
+            is_op,
+            channel or "public",
+            player=player,
         )
         if not success:
             player.send_message(f"§c{assistant_tag} 对话失败: {reply}")
@@ -1027,16 +1279,18 @@ class ARCAIHelperPlugin(Plugin):
                 "时长用 minutes，单位是分钟；可填 -1 或 无期；不填则用服务器默认一键入狱时长（默认 30 分钟）。"
                 "reason 是入狱原因，会写入监狱插件，可留空。"
                 "释放用 mc_release_player，查看在押名单用 mc_list_prisoners。"
-                "入狱和释放只有管理员（OP）下令时才能执行。"
+                "入狱和释放只有管理员及以上级别可以执行。"
             )
         if self._get_arc_core_plugin() is not None:
             parts.append(
-                "本服已安装弧光核心天眼。查询玩家在哪、近期做了什么、打了谁、被谁打、"
-                "某个坐标附近发生过什么、操作是否在领地内时，必须调用 "
-                "mc_skyeye_player / mc_skyeye_combat / mc_skyeye_location，禁止编造。"
+                "本服已安装弧光核心。查询/变动银行、查询领地、弧光传送系统时分别调用 "
+                "mc_economy / mc_land / mc_arc_tp（sub_action: query|change / list|info|at / home|warp|pos），"
+                "禁止用 mc_run_command 代替。"
+                "查询玩家在哪、近期做了什么、打了谁、被谁打、某个坐标附近发生过什么时，"
+                "必须调用 mc_skyeye_player / mc_skyeye_combat / mc_skyeye_location，禁止编造。"
                 "不要求该玩家当前在线。不知道在哪台服时 server 留空，中枢会搜索全部已连接服务器。"
                 "调用天眼时必须自己把用户说的时长换算成分钟写入 minutes，例如一天=1440、一小时=60。"
-                "这些工具只有管理员（OP）下令时才能执行。"
+                "银行、领地、传送、天眼工具只有管理员及以上级别可以执行。"
             )
         return "\n\n".join(parts)
 
@@ -1053,8 +1307,6 @@ class ARCAIHelperPlugin(Plugin):
 
     def _handle_ai_reply_commands(self, reply_text: str, sender) -> str:
         pattern = r"\[execution_command:(.+?)\]"
-        blacklist = ["stop", "kill"]
-        op_only_commands = ["gamemode"]
 
         assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
         assistant_tag = f"[{assistant_name}]"
@@ -1064,8 +1316,7 @@ class ARCAIHelperPlugin(Plugin):
             return reply_text
 
         cleaned_text = re.sub(pattern, "", reply_text).strip()
-
-        is_op = bool(getattr(sender, "is_op", False))
+        level = self._resolve_permission_level(player=sender)
 
         for raw_command in commands:
             command_line = str(raw_command or "").strip()
@@ -1073,17 +1324,10 @@ class ARCAIHelperPlugin(Plugin):
                 continue
 
             normalized_command_line = command_line.lstrip("/").strip()
-            lower_command = normalized_command_line.lower()
-            command_name = lower_command.split(" ", 1)[0] if lower_command else ""
-
-            if command_name in blacklist:
+            ok, reason = validate_command_for_level(normalized_command_line, level)
+            if not ok:
                 if sender is not None:
-                    sender.send_message(f"§c{assistant_tag} 尝试执行被禁止的危险指令，已拦截。")
-                continue
-
-            if (command_name in op_only_commands) and (not is_op):
-                if sender is not None:
-                    sender.send_message(f"§c{assistant_tag} 该指令仅允许 OP 使用，已拦截。")
+                    sender.send_message(f"§c{assistant_tag} {reason or '指令已被拦截'}")
                 continue
 
             try:
@@ -1094,7 +1338,12 @@ class ARCAIHelperPlugin(Plugin):
 
         return cleaned_text
 
-    def _build_messages_for_player(self, player_name: str, current_content: str, is_op: bool | None = None) -> List[Dict[str, str]]:
+    def _build_messages_for_player(
+        self,
+        player_name: str,
+        current_content: str,
+        permission_level: AIPermissionLevel | None = None,
+    ) -> List[Dict[str, str]]:
         messages: List[Dict[str, str]] = []
 
         system_text = self._build_system_prompt()
@@ -1142,11 +1391,11 @@ class ARCAIHelperPlugin(Plugin):
                 }
             )
 
-        if is_op is None:
+        if permission_level is None:
             final_content = f"{player_name}: {current_content}"
         else:
-            status_text = "OP玩家" if is_op else "普通玩家"
-            final_content = f"{player_name}({status_text}): {current_content}"
+            status_text = level_display(permission_level)
+            final_content = f"{player_name}(AI权限:{status_text}): {current_content}"
 
         messages.append(
             {
@@ -1235,6 +1484,7 @@ class ARCAIHelperPlugin(Plugin):
                 position = queue_size + 1
 
             is_op = bool(getattr(sender, "is_op", False))
+            permission_level = self._resolve_permission_level(player=sender)
             self.request_queue.put(
                 {
                     "type": "gui",
@@ -1243,6 +1493,7 @@ class ARCAIHelperPlugin(Plugin):
                     "player_name": sender.name,
                     "user_content": user_text,
                     "is_op": is_op,
+                    "permission_level": permission_level,
                     "channel": "gui",
                 }
             )
@@ -1308,15 +1559,17 @@ class ARCAIHelperPlugin(Plugin):
             position = queue_size + 1
 
         is_op = bool(getattr(player, "is_op", False))
+        permission_level = self._resolve_permission_level(player=player)
         self.request_queue.put(
             {
                 "type": "public",
                 "owner_name": player_name,
                 "player": player,
                 "player_name": player_name,
-                    "user_content": user_content,
-                    "is_op": is_op,
-                    "channel": "public",
+                "user_content": user_content,
+                "is_op": is_op,
+                "permission_level": permission_level,
+                "channel": "public",
             }
         )
 

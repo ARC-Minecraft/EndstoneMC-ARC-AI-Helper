@@ -79,6 +79,7 @@ class AstrBotHubChatClient:
         player_xuid: str,
         content: str,
         is_op: bool,
+        permission_level=None,
         extra_system_prompt: str,
         channel: str,
         server_name: str,
@@ -93,6 +94,7 @@ class AstrBotHubChatClient:
                 player_xuid=player_xuid,
                 content=content,
                 is_op=is_op,
+                permission_level=permission_level,
                 extra_system_prompt=extra_system_prompt,
                 channel=channel,
                 server_name=server_name,
@@ -288,6 +290,7 @@ class AstrBotHubChatClient:
         player_xuid: str,
         content: str,
         is_op: bool,
+        permission_level=None,
         extra_system_prompt: str,
         channel: str,
         server_name: str,
@@ -299,6 +302,18 @@ class AstrBotHubChatClient:
         request_id = str(uuid.uuid4())
         fut = asyncio.get_running_loop().create_future()
         self._pending[request_id] = fut
+        level_value = permission_level
+        try:
+            from .ai_permission import AIPermissionLevel, level_display
+
+            if isinstance(level_value, AIPermissionLevel):
+                level_name = level_display(level_value)
+            elif level_value is not None:
+                level_name = level_display(AIPermissionLevel(int(level_value)))
+            else:
+                level_name = "assistant"
+        except Exception:
+            level_name = str(level_value or "assistant")
         payload = {
             "type": "ai_chat",
             "request_id": request_id,
@@ -306,6 +321,7 @@ class AstrBotHubChatClient:
             "player_xuid": player_xuid,
             "content": content,
             "is_op": bool(is_op),
+            "permission_level": level_name,
             "extra_system_prompt": extra_system_prompt,
             "channel": channel,
             "server_name": server_name,
