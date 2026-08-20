@@ -253,13 +253,13 @@ class ARCAIHelperPlugin(Plugin):
                 )
             elif name in ("economy", "money", "bank"):
                 text = self._run_on_server_thread(lambda: self._tool_arc_economy(payload))
-            elif name in ("resolve_player", "lookup_player"):
+            elif name in ("player_basic_info", "resolve_player", "lookup_player"):
                 result = self._run_on_server_thread(
-                    lambda: self._tool_resolve_player(payload)
+                    lambda: self._tool_player_basic_info(payload)
                 )
                 if isinstance(result, dict):
                     return result
-                return {"ok": False, "error": str(result or "解析玩家失败")}
+                return {"ok": False, "error": str(result or "获取玩家信息失败")}
             elif name in ("land", "lands"):
                 text = self._run_on_server_thread(lambda: self._tool_arc_land(payload))
             elif name in ("landmarks", "landmark", "warps"):
@@ -670,8 +670,8 @@ class ARCAIHelperPlugin(Plugin):
             return True
         return False
 
-    def _tool_resolve_player(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Resolve a player via arc_core APIs (shared player_basic_info)."""
+    def _tool_player_basic_info(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Look up a player via arc_core cross-server APIs (player_basic_info)."""
         name = str(payload.get("player_name") or "").strip()
         if not name:
             return {"ok": False, "error": "玩家名为空"}
@@ -684,6 +684,13 @@ class ARCAIHelperPlugin(Plugin):
         xuid = getter(name)
         if not xuid:
             return {"ok": False, "error": "找不到该玩家"}
+        xuid = str(xuid).strip()
+        playtime_api = getattr(core, "api_get_player_playtime", None)
+        playtime: Dict[str, Any] = {}
+        if callable(playtime_api):
+            raw = playtime_api(raw_player_name=name, xuid=xuid)
+            if isinstance(raw, dict):
+                playtime = raw
         canon = name
         name_api = getattr(core, "api_get_player_name_by_xuid", None)
         if callable(name_api):
@@ -692,8 +699,15 @@ class ARCAIHelperPlugin(Plugin):
             "ok": True,
             "text": f"找到 {canon}",
             "player_name": canon,
-            "xuid": str(xuid),
+            "xuid": xuid,
+            "session_count": int(playtime.get("session_count") or 0),
+            "total_playtime": int(playtime.get("total_playtime") or 0),
+            "is_online": bool(playtime.get("is_online")),
         }
+
+    def _tool_resolve_player(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Backward-compatible alias for ``player_basic_info``."""
+        return self._tool_player_basic_info(payload)
 
     def _caller_player_name(self, payload: Dict[str, Any]) -> str:
         name = str(payload.get("caller_player_name") or "").strip()

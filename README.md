@@ -1,9 +1,9 @@
 ## EndStone ARC AI Helper（弧光 Agent）
-[![Version](https://img.shields.io/badge/version-v2.1.4-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
+[![Version](https://img.shields.io/badge/version-v2.1.5-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 
-一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.4**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
+一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.5**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
 
 支持：
 
@@ -181,7 +181,8 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 
 ### 更新日志
 
-- **2.1.4**：`/mc 绑定` 改为调用弧光核心 `api_get_player_xuid_by_name` 确认玩家（跨服共通账号库，不再只看中枢 data.json）；`mc_economy` 新增 `transfer`，已绑定用户可用自己的余额发红包。需中枢 ≥ 1.7.2。
+- **2.1.5**：绑定/查玩家统一走 `player_basic_info` 动作，内部调用弧光核心 `api_get_player_xuid_by_name` + `api_get_player_playtime`（跨服共通库）；修复 `_tool_player_basic_info` 未定义导致绑定失败。需中枢 ≥ 1.7.3。
+- **2.1.4**：`/mc 绑定` 改为调用弧光核心玩家解析确认角色；`mc_economy` 新增 `transfer` 发红包。需中枢 ≥ 1.7.2。
 - **2.1.3**：`mc_economy` 查询本人余额不再要求管理员（游戏内任意玩家、QQ 已绑定用户可查自己）；查他人或 change 仍仅管理员。需中枢 ≥ 1.7.1。
 - **2.1.2**：移除 `/ai` GUI 聊天面板，统一通过公屏触发词或 AstrBot 群聊与 Agent 对话；README 新增效果预览截图。
 - **2.1.1**：把弧光核心的出生点、公共传送点、公共领地注入系统提示，并新增只读工具 `mc_landmarks`，方便回答地标/功能建筑。需核心 ≥ 0.8.13。
