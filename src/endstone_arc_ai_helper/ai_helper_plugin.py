@@ -645,10 +645,35 @@ class ARCAIHelperPlugin(Plugin):
             heading=f"坐标 ({x:.1f},{y:.1f},{z:.1f}) 半径 {radius:.0f} 格近 {minutes} 分钟活动",
         )
 
+    def _economy_query_is_self(self, payload: Dict[str, Any]) -> bool:
+        """Return True when a balance query targets the caller's own account."""
+        target_name = str(payload.get("player_name") or "").strip()
+        target_xuid = str(payload.get("xuid") or "").strip()
+        if not target_name and not target_xuid:
+            return True
+        caller_name = str(payload.get("caller_player_name") or "").strip()
+        if not caller_name:
+            caller_name = str(payload.get("bound_player_name") or "").strip()
+        caller_xuid = str(payload.get("caller_xuid") or "").strip()
+        if not caller_xuid:
+            caller_xuid = str(payload.get("player_xuid") or "").strip()
+        if target_xuid and caller_xuid and target_xuid == caller_xuid:
+            return True
+        if target_name and caller_name and target_name.lower() == caller_name.lower():
+            return True
+        return False
+
     def _tool_arc_economy(self, payload: Dict[str, Any]) -> str:
-        denied = self._tool_require_admin(payload)
-        if denied:
-            return denied
+        sub = str(payload.get("sub_action") or payload.get("operation") or "query").strip().lower()
+        if sub in ("query", "get", "balance", ""):
+            if not self._economy_query_is_self(payload):
+                denied = self._tool_require_admin(payload)
+                if denied:
+                    return denied
+        else:
+            denied = self._tool_require_admin(payload)
+            if denied:
+                return denied
         core = self._get_arc_core_plugin()
         if core is None:
             return "本服未安装弧光核心 arc_core"
@@ -656,7 +681,6 @@ class ARCAIHelperPlugin(Plugin):
         xuid = str(payload.get("xuid") or "").strip()
         if not player_name and not xuid:
             return "需要 player_name 或 xuid"
-        sub = str(payload.get("sub_action") or payload.get("operation") or "query").strip().lower()
         if sub in ("query", "get", "balance", ""):
             getter = getattr(core, "api_get_player_money", None)
             if not callable(getter):
@@ -1145,6 +1169,9 @@ class ARCAIHelperPlugin(Plugin):
             args = dict(tool_args or {})
             args.setdefault("is_op", is_admin)
             args.setdefault("permission_level", level_value)
+            if player is not None:
+                args.setdefault("caller_player_name", str(getattr(player, "name", "") or ""))
+                args.setdefault("caller_xuid", self._player_xuid(player))
             result = self.run_ai_tool(tool_name, args)
             if result.get("ok"):
                 return str(result.get("text") or "（无返回）")
@@ -1286,7 +1313,8 @@ class ARCAIHelperPlugin(Plugin):
                 "必须调用 mc_skyeye_player / mc_skyeye_combat / mc_skyeye_location，禁止编造。"
                 "不要求该玩家当前在线。不知道在哪台服时 server 留空，中枢会搜索全部已连接服务器。"
                 "调用天眼时必须自己把用户说的时长换算成分钟写入 minutes，例如一天=1440、一小时=60。"
-                "银行、领地、传送、天眼工具只有管理员及以上级别可以执行。"
+                "银行：查自己余额用 mc_economy（sub_action=query）；查他人或 change 加减钱仅管理员。"
+                "领地、传送、天眼工具只有管理员及以上级别可以执行。"
                 "mc_landmarks 为公开只读，助手级别也可以用。"
             )
         return "\n\n".join(parts)

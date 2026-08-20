@@ -112,7 +112,7 @@ def build_local_agent_tools(*, has_prison: bool = False, has_arc_core: bool = Fa
                 ),
                 _fn(
                     "mc_economy",
-                    "弧光银行：查询或变动余额（管理员及以上）。sub_action=query|change。",
+                    "弧光银行：sub_action=query 查余额（查自己无需管理员）；change 加减钱需管理员。",
                     {
                         "player_name": {"type": "string"},
                         "xuid": {"type": "string"},

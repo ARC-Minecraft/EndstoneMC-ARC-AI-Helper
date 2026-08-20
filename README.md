@@ -1,9 +1,9 @@
 ## EndStone ARC AI Helper（弧光 Agent）
-[![Version](https://img.shields.io/badge/version-v2.1.2-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
+[![Version](https://img.shields.io/badge/version-v2.1.3-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 
-一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.2**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
+一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.3**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
 
 支持：
 
@@ -13,7 +13,7 @@
   - **AstrBot 中枢**：工具由中枢挂载，本插件在游戏服执行
   - **本机 Agent（无需 AstrBot）**：配置 `providers.json` 后，通过 OpenAI 兼容 Function Calling 调用同一套 `mc_*` 工具
 - 人格与系统提示严格分开：`persona.txt` 只用于降级人格，`system_prompt.txt` 只写能力
-- 对接弧光核心：银行、领地、传送、天眼（管理员及以上）；**出生点 / Warp / 公共领地**会注入对话上下文，并可用 `mc_landmarks` 刷新
+- 对接弧光核心：查自己余额无需管理员；查他人/变动余额、领地、传送、天眼需管理员及以上；**出生点 / Warp / 公共领地**会注入对话上下文，并可用 `mc_landmarks` 刷新
 - 对接监狱插件：一键入狱 / 释放 / 在押名单（管理员及以上）
 
 ### 效果预览
@@ -84,7 +84,7 @@
 | `mc_server_info` | 已激活即可 | `server` | 多开服时要填 | 空 | 名称 / 版本 / 在线 / 运行时长 |
 | `mc_run_command` | 按 AI 权限三档（见下） | `command`, `server` | `command` 是 | `server` 空 | 不含 `/` 的控制台指令 |
 | `mc_landmarks` | 已激活即可 | `server` | | 空 | 本服出生点、公共传送点、公共领地/功能区 |
-| `mc_economy` | 管理员及以上 | `player_name`, `sub_action`, `delta`, `server` | `player_name` | `sub_action=query` | 银行余额查询 / 变动（`change` + `delta`） |
+| `mc_economy` | query 查自己：已绑定/游戏内均可；查他人或 change：管理员及以上 | `player_name`, `sub_action`, `delta`, `server` | query 查自己时可空 | `sub_action=query` | 银行余额查询 / 变动（`change` + `delta`） |
 | `mc_land` | 管理员及以上 | `player_name`, `sub_action`, `land_id`, `x/y/z`, `server` | 视操作 | | 领地列表 / 详情 / 坐标解析 |
 | `mc_arc_tp` | 管理员及以上 | `player_name`, `sub_action`, `home_name`, `warp_name`, `x/y/z`, `server` | `player_name` | | 弧光传送：Home / Warp / 坐标 |
 | `mc_jail_player` | 仅管理员 | `player_name`, `minutes`, `reason`, `server` | 仅 `player_name` | `minutes`/`reason`/`server` 空 | `minutes` 为刑期分钟，`-1`/`无期` 为无期；`reason` 写入监狱插件 |
@@ -100,8 +100,8 @@
 
 | 级别 | 配置 / 节点 | 能力 |
 |------|-------------|------|
-| **助手** | `default_permission_level: "assistant"`（默认） | `tp` / `give` / `effect` / `spawnpoint` 等基础玩家交互 |
-| **管理员** | `"admin"`、`op_maps_to_admin: true`、节点 `arc_ai_helper.permission.admin`、游戏 OP | 大部分 OP 指令；**不含** `ban`/`op`/`permission`/`stop` 等敏感指令；可用银行/领地/传送/天眼/入狱 |
+| **助手** | `default_permission_level: "assistant"`（默认） | `tp` / `give` / `effect` / `spawnpoint` 等基础玩家交互；**可查自己银行余额** |
+| **管理员** | `"admin"`、`op_maps_to_admin: true`、节点 `arc_ai_helper.permission.admin`、游戏 OP | 大部分 OP 指令；**不含** `ban`/`op`/`permission`/`stop` 等敏感指令；可查/改任意玩家银行、领地、传送、天眼、入狱 |
 | **代理服主** | 节点 `arc_ai_helper.permission.proxy_owner` | 全部指令 |
 
 在 `chat_config.json` 里把 `"default_permission_level": "admin"` 即可让全服默认管理员级别。也可用 `"permission_overrides": { "玩家名或XUID": "admin" }` 单独指定。
@@ -181,6 +181,7 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 
 ### 更新日志
 
+- **2.1.3**：`mc_economy` 查询本人余额不再要求管理员（游戏内任意玩家、QQ 已绑定用户可查自己）；查他人或 change 仍仅管理员。需中枢 ≥ 1.7.1。
 - **2.1.2**：移除 `/ai` GUI 聊天面板，统一通过公屏触发词或 AstrBot 群聊与 Agent 对话；README 新增效果预览截图。
 - **2.1.1**：把弧光核心的出生点、公共传送点、公共领地注入系统提示，并新增只读工具 `mc_landmarks`，方便回答地标/功能建筑。需核心 ≥ 0.8.13。
 - **2.1.0（弧光 Agent）**：不接 AstrBot 时，本机 `providers.json` 也可通过 OpenAI Function Calling 调用全部 `mc_*` 工具；产品定位升级为服务器 Agent；默认头衔「弧光Agent」。
