@@ -253,6 +253,13 @@ class ARCAIHelperPlugin(Plugin):
                 )
             elif name in ("economy", "money", "bank"):
                 text = self._run_on_server_thread(lambda: self._tool_arc_economy(payload))
+            elif name in ("resolve_player", "lookup_player"):
+                result = self._run_on_server_thread(
+                    lambda: self._tool_resolve_player(payload)
+                )
+                if isinstance(result, dict):
+                    return result
+                return {"ok": False, "error": str(result or "解析玩家失败")}
             elif name in ("land", "lands"):
                 text = self._run_on_server_thread(lambda: self._tool_arc_land(payload))
             elif name in ("landmarks", "landmark", "warps"):
@@ -663,6 +670,128 @@ class ARCAIHelperPlugin(Plugin):
             return True
         return False
 
+    def _tool_resolve_player(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve a player via arc_core APIs (shared player_basic_info)."""
+        name = str(payload.get("player_name") or "").strip()
+        if not name:
+            return {"ok": False, "error": "玩家名为空"}
+        core = self._get_arc_core_plugin()
+        if core is None:
+            return {"ok": False, "error": "本服未安装弧光核心 arc_core"}
+        getter = getattr(core, "api_get_player_xuid_by_name", None)
+        if not callable(getter):
+            return {"ok": False, "error": "弧光核心版本过旧，没有玩家解析接口"}
+        xuid = getter(name)
+        if not xuid:
+            return {"ok": False, "error": "找不到该玩家"}
+        canon = name
+        name_api = getattr(core, "api_get_player_name_by_xuid", None)
+        if callable(name_api):
+            canon = str(name_api(xuid) or name).strip() or name
+        return {
+            "ok": True,
+            "text": f"找到 {canon}",
+            "player_name": canon,
+            "xuid": str(xuid),
+        }
+
+    def _caller_player_name(self, payload: Dict[str, Any]) -> str:
+        name = str(payload.get("caller_player_name") or "").strip()
+        if name:
+            return name
+        return str(payload.get("bound_player_name") or "").strip()
+
+    def _tool_arc_economy_transfer(self, core, payload: Dict[str, Any]) -> str:
+        """Pay from the caller's own balance using arc_core money APIs."""
+        sender = self._caller_player_name(payload)
+        if not sender:
+            sender = str(payload.get("from_player") or "").strip()
+        if not sender:
+            return "发红包需要知道付款人（已绑定角色）"
+        amount_raw = payload.get("amount")
+        if amount_raw in (None, ""):
+            amount_raw = payload.get("delta")
+        try:
+            amount = abs(float(amount_raw))
+        except (TypeError, ValueError):
+            return "红包金额无效，需要 amount"
+        if amount <= 0:
+            return "红包金额必须大于 0"
+
+        to_online_raw = str(payload.get("to_online") or "").strip().lower()
+        to_online = to_online_raw in {"1", "true", "yes", "online", "all"}
+        targets_raw = str(payload.get("targets") or payload.get("player_name") or "").strip()
+        if targets_raw.lower() in {"", "online", "all", "在线", "在线玩家", "大家"}:
+            to_online = True
+            names: list[str] = []
+        else:
+            names = [
+                part.strip()
+                for part in targets_raw.replace("、", ",").replace("，", ",").replace(" ", ",").split(",")
+                if part.strip()
+            ]
+
+        sender_lower = sender.lower()
+        if to_online:
+            for player in list(self.server.online_players or []):
+                pname = str(getattr(player, "name", "") or "").strip()
+                if pname and pname.lower() != sender_lower:
+                    names.append(pname)
+        # de-dup keep order
+        seen: set[str] = set()
+        recipients: list[str] = []
+        for name in names:
+            key = name.lower()
+            if key == sender_lower or key in seen:
+                continue
+            seen.add(key)
+            recipients.append(name)
+        if not recipients:
+            return "没有可发红包的对象（在线玩家为空，或名单里只有你自己）"
+
+        getter = getattr(core, "api_get_player_money", None)
+        xuid_api = getattr(core, "api_get_player_xuid_by_name", None)
+        adjuster = getattr(core, "api_adjust_player_money", None)
+        if not callable(getter) or not callable(adjuster) or not callable(xuid_api):
+            return "弧光核心版本过旧，没有银行转账接口"
+        if not xuid_api(sender):
+            return f"找不到付款人「{sender}」"
+        missing = [name for name in recipients if not xuid_api(name)]
+        if missing:
+            return "找不到收款人：" + "、".join(missing)
+
+        total = amount * len(recipients)
+        balance = float(getter(player_name=sender) or 0)
+        if balance + 1e-9 < total:
+            return (
+                f"余额不足：当前 {balance:.2f}，给 {len(recipients)} 人每人 {amount:.2f} "
+                f"需要 {total:.2f}"
+            )
+        debit = adjuster(-total, player_name=sender, notify=True)
+        if not isinstance(debit, dict) or not debit.get("ok"):
+            return str((debit or {}).get("error") or "扣款失败")
+
+        paid: list[str] = []
+        failed: list[str] = []
+        for name in recipients:
+            credit = adjuster(amount, player_name=name, notify=True)
+            if isinstance(credit, dict) and credit.get("ok"):
+                paid.append(name)
+            else:
+                failed.append(name)
+                adjuster(amount, player_name=sender, notify=False)
+        remain = float(getter(player_name=sender) or 0)
+        if not paid:
+            return f"红包发放失败，已退回。当前余额 {remain:.2f}"
+        text = (
+            f"{sender} 已从自己账户给 {len(paid)} 人各发 {amount:.2f}，"
+            f"共支出 {amount * len(paid):.2f}，余额 {remain:.2f}。"
+            f"收款人：{'、'.join(paid)}"
+        )
+        if failed:
+            text += f"。未成功：{'、'.join(failed)}（已退回对应金额）"
+        return text
+
     def _tool_arc_economy(self, payload: Dict[str, Any]) -> str:
         sub = str(payload.get("sub_action") or payload.get("operation") or "query").strip().lower()
         if sub in ("query", "get", "balance", ""):
@@ -670,6 +799,10 @@ class ARCAIHelperPlugin(Plugin):
                 denied = self._tool_require_admin(payload)
                 if denied:
                     return denied
+        elif sub in ("transfer", "pay", "send", "hongbao", "redpack", "红包"):
+            denied = self._tool_require_admin(payload)
+            if denied and not self._caller_player_name(payload):
+                return denied
         else:
             denied = self._tool_require_admin(payload)
             if denied:
@@ -677,6 +810,8 @@ class ARCAIHelperPlugin(Plugin):
         core = self._get_arc_core_plugin()
         if core is None:
             return "本服未安装弧光核心 arc_core"
+        if sub in ("transfer", "pay", "send", "hongbao", "redpack", "红包"):
+            return self._tool_arc_economy_transfer(core, payload)
         player_name = str(payload.get("player_name") or "").strip()
         xuid = str(payload.get("xuid") or "").strip()
         if not player_name and not xuid:
@@ -712,7 +847,7 @@ class ARCAIHelperPlugin(Plugin):
                 label = player_name or result.get("xuid") or xuid
                 return f"{label} 余额已变动 {result.get('delta'):+.2f}，当前 {result.get('money'):.2f}"
             return str(result.get("error") or "银行变动失败")
-        return f"未知银行操作: {sub}（可用 query / change）"
+        return f"未知银行操作: {sub}（可用 query / change / transfer）"
 
     def _tool_arc_land(self, payload: Dict[str, Any]) -> str:
         denied = self._tool_require_admin(payload)
@@ -1313,7 +1448,9 @@ class ARCAIHelperPlugin(Plugin):
                 "必须调用 mc_skyeye_player / mc_skyeye_combat / mc_skyeye_location，禁止编造。"
                 "不要求该玩家当前在线。不知道在哪台服时 server 留空，中枢会搜索全部已连接服务器。"
                 "调用天眼时必须自己把用户说的时长换算成分钟写入 minutes，例如一天=1440、一小时=60。"
-                "银行：查自己余额用 mc_economy（sub_action=query）；查他人或 change 加减钱仅管理员。"
+                "银行：查自己余额用 mc_economy（sub_action=query）；"
+                "已绑定/游戏内玩家可用 transfer 从自己账户给别人发红包（每人 amount，targets 或 to_online）。"
+                "查他人或 change 加减钱仅管理员。"
                 "领地、传送、天眼工具只有管理员及以上级别可以执行。"
                 "mc_landmarks 为公开只读，助手级别也可以用。"
             )
