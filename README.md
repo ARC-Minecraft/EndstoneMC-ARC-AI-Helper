@@ -1,9 +1,9 @@
 ## EndStone ARC AI Helper（弧光 Agent）
-[![Version](https://img.shields.io/badge/version-v2.1.5-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
+[![Version](https://img.shields.io/badge/version-v2.1.6-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 
-一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.5**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
+一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.6**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
 
 支持：
 
@@ -96,15 +96,15 @@
 
 游戏内调用时 `server` 可留空（本服执行）。QQ 侧须先 `/mc activate`。
 
-#### AI 权限三档（v2.0.0+）
+#### AI 权限三档（v2.0.0+，v2.1.6 起语义修正）
 
-| 级别 | 配置 / 节点 | 能力 |
+| 级别 | 如何获得（请求者身份） | 能力 |
 |------|-------------|------|
-| **助手** | `default_permission_level: "assistant"`（默认） | `tp` / `give` / `effect` / `spawnpoint` 等基础玩家交互；**可查自己银行余额** |
-| **管理员** | `"admin"`、`op_maps_to_admin: true`、节点 `arc_ai_helper.permission.admin`、游戏 OP | 大部分 OP 指令；**不含** `ban`/`op`/`permission`/`stop` 等敏感指令；可查/改任意玩家银行、领地、传送、天眼、入狱 |
-| **代理服主** | 节点 `arc_ai_helper.permission.proxy_owner` | 全部指令 |
+| **助手** | 普通玩家（非 OP）；或天星能力上限为助手时的上限压制 | `tp` / `give` / `effect` / `spawnpoint` 等基础玩家交互；**可查自己银行余额** |
+| **管理员** | 游戏 OP（`op_maps_to_admin: true`）、节点 `arc_ai_helper.permission.admin`、`permission_overrides` | 大部分 OP 指令；**不含** `ban`/`op`/`deop`/`permission`/`stop` 等敏感指令；可查/改任意玩家银行、领地、传送、天眼、入狱 |
+| **代理服主** | 节点 `arc_ai_helper.permission.proxy_owner` 或 overrides | 全部指令 |
 
-在 `chat_config.json` 里把 `"default_permission_level": "admin"` 即可让全服默认管理员级别。也可用 `"permission_overrides": { "玩家名或XUID": "admin" }` 单独指定。
+**重要**：`default_permission_level` / `ai_capability_level` 表示**天星自身的能力上限**（例如 `"admin"` = 天星最多做到管理员档），**不是**把每个玩家都抬成管理员。实际生效档位 = `min(能力上限, 请求者身份)`。单独提权某玩家请用 `"permission_overrides": { "玩家名或XUID": "admin" }`。
 
 ### 配置文件说明
 
@@ -129,7 +129,7 @@
   "hub_token": "",
   "server_name": "",
   "astrbot_timeout": 180,
-  "default_permission_level": "assistant",
+  "default_permission_level": "admin",
   "op_maps_to_admin": true,
   "permission_overrides": {},
   "local_agent_max_tool_rounds": 8
@@ -140,7 +140,7 @@
 - **max_history_messages**：公屏对话历史条数上限（本机 Agent 上下文）。
 - **assistant_title** / **assistant_name**：聊天前缀头衔与名称（默认「弧光Agent」）。
 - **hub_*** / **server_name** / **astrbot_timeout**：中枢连接（可选）。
-- **default_permission_level** / **op_maps_to_admin** / **permission_overrides**：三档权限。
+- **default_permission_level**（或 `ai_capability_level`）：天星能力上限；**op_maps_to_admin** / **permission_overrides**：请求者身份映射。
 - **local_agent_max_tool_rounds**（v2.1.0）：本机 Agent 单次对话最多工具往返次数，默认 `8`。
 
 #### 2. `persona.txt`（仅本机 Agent / 降级使用）
@@ -181,6 +181,7 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 
 ### 更新日志
 
+- **2.1.6**：修复权限模型——`default_permission_level` 仅表示天星能力上限，与请求者身份取小后生效（普通玩家不再因配置为 admin 而获得管理员工具）；天星指令与改动类工具写入天眼（`AiAgent`）；管理员档禁止 `op`/`deop`（含 `execute ... run op`）。需弧光核心 ≥ 0.8.14。
 - **2.1.5**：绑定/查玩家统一走 `player_basic_info` 动作，内部调用弧光核心 `api_get_player_xuid_by_name` + `api_get_player_playtime`（跨服共通库）；修复 `_tool_player_basic_info` 未定义导致绑定失败。需中枢 ≥ 1.7.3。
 - **2.1.4**：`/mc 绑定` 改为调用弧光核心玩家解析确认角色；`mc_economy` 新增 `transfer` 发红包。需中枢 ≥ 1.7.2。
 - **2.1.3**：`mc_economy` 查询本人余额不再要求管理员（游戏内任意玩家、QQ 已绑定用户可查自己）；查他人或 change 仍仅管理员。需中枢 ≥ 1.7.1。

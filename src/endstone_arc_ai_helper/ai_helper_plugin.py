@@ -27,6 +27,22 @@ from .astrbot_hub_client import AstrBotHubChatClient
 from .chat_ai_manager import ChatAIManager
 from .local_agent_tools import build_local_agent_tools, resolve_tool_action
 
+# Mutating / audit-worthy tools written to ARCCore sky eye.
+_SKY_EYE_AUDIT_ACTIONS = frozenset(
+    {
+        "economy",
+        "money",
+        "bank",
+        "land",
+        "lands",
+        "arc_tp",
+        "arc_teleport",
+        "core_tp",
+        "jail",
+        "release",
+    }
+)
+
 
 DEFAULT_PERSONA = (
     "你是Minecraft服务器中的弧光Agent「天星」，负责协助管理与服务本服玩家。"
@@ -57,8 +73,11 @@ DEFAULT_SYSTEM_PROMPT = (
     "regeneration, resistance, slowness, slow_falling, speed, strength, water_breathing, "
     "weakness, wither。"
     "禁止 stop、kill。权限分三档：助手（tp/give/effect 等）、管理员（大部分 OP 指令）、"
-    "代理服主（全部指令）。gamemode 等需管理员及以上；ban/op/permission 等仅代理服主。"
-    "用户消息里会带玩家名与 AI 权限级别，请据此判断。"
+    "代理服主（全部指令）。gamemode / 银行加减钱 / 领地改动等需管理员及以上；"
+    "ban/op/deop/permission 等仅代理服主。"
+    "用户消息里的身份标签是请求者身份（普通玩家/助手/管理员/代理服主），"
+    "不是「天星自己的能力上限」。对普通玩家与助手身份：不要执行 gamemode、加减钱、"
+    "入狱等管理操作，即使对方口头要求；应拒绝并说明需要管理员。"
 )
 
 
@@ -280,10 +299,101 @@ class ARCAIHelperPlugin(Plugin):
                 text = self._run_on_server_thread(lambda: self._tool_skyeye_location(payload))
             else:
                 return {"ok": False, "error": f"未知工具动作: {action}"}
-            return {"ok": True, "text": str(text or "").strip() or "（无返回）"}
+            result = {"ok": True, "text": str(text or "").strip() or "（无返回）"}
+            self._sky_eye_log_agent_tool(name, payload, result)
+            return result
         except Exception as error:
             self.logger.warning(f"[ARC AI Helper] AI 工具 {action} 失败: {error}")
-            return {"ok": False, "error": str(error)}
+            fail = {"ok": False, "error": str(error)}
+            self._sky_eye_log_agent_tool(name, payload, fail)
+            return fail
+
+    def _sky_eye_log_agent_tool(
+        self,
+        action: str,
+        payload: Dict[str, Any],
+        result: Dict[str, Any],
+    ) -> None:
+        """Write Agent tool / command activity into ARCCore sky eye."""
+        name = str(action or "").strip().lower()
+        if name not in _SKY_EYE_AUDIT_ACTIONS:
+            return
+        if name in ("economy", "money", "bank"):
+            sub = str(
+                payload.get("sub_action") or payload.get("operation") or "query"
+            ).strip().lower()
+            if sub in ("query", "get", "balance", ""):
+                return
+        if name in ("land", "lands"):
+            sub = str(
+                payload.get("sub_action") or payload.get("operation") or "list"
+            ).strip().lower()
+            if sub in ("list", "info", "at", "query", ""):
+                return
+
+        level = self._resolve_permission_level(payload=payload)
+        caller = (
+            str(payload.get("caller_player_name") or "").strip()
+            or str(payload.get("bound_player_name") or "").strip()
+            or str(payload.get("player_name") or "").strip()
+        )
+        bits: List[str] = [
+            f"tool={name}",
+            f"level={level_display(level)}",
+        ]
+        if caller:
+            bits.append(f"caller={caller}")
+        if name == "cmd":
+            cmd = str(payload.get("command") or "").strip()
+            if cmd:
+                bits.append(f"cmd=/{cmd.lstrip('/')}")
+        else:
+            for key in (
+                "sub_action",
+                "player_name",
+                "targets",
+                "amount",
+                "delta",
+                "minutes",
+                "reason",
+                "home_name",
+                "warp_name",
+                "x",
+                "y",
+                "z",
+            ):
+                val = str(payload.get(key) or "").strip()
+                if val:
+                    bits.append(f"{key}={val}")
+        if result.get("ok"):
+            bits.append("status=ok")
+        else:
+            bits.append("status=fail")
+            err = str(result.get("error") or "").strip()
+            if err:
+                bits.append(f"error={err[:120]}")
+        detail = "; ".join(bits)
+        self._sky_eye_log_agent(detail=detail, target_name=caller)
+
+    def _sky_eye_log_agent(self, *, detail: str, target_name: str = "") -> None:
+        core = self._get_arc_core_plugin()
+        if core is None:
+            return
+        logger_api = getattr(core, "api_sky_eye_log", None)
+        if not callable(logger_api):
+            return
+        agent_name = str(self.chat_config.get("assistant_name") or "弧光天星").strip()
+        try:
+            logger_api(
+                "AiAgent",
+                player_name=agent_name or "弧光天星",
+                player_xuid="",
+                detail=str(detail or "")[:500],
+                target_name=str(target_name or "").strip(),
+                target_type="player" if target_name else "",
+            )
+        except Exception as error:
+            self.logger.debug(f"[ARC AI Helper] 天眼留档失败: {error}")
 
     def _tool_list_players(self) -> str:
         online_players = list(self.server.online_players or [])
@@ -377,6 +487,11 @@ class ARCAIHelperPlugin(Plugin):
             return "命令为空"
 
         level = self._resolve_permission_level(payload=data)
+        caller = (
+            str(data.get("caller_player_name") or "").strip()
+            or str(data.get("bound_player_name") or "").strip()
+            or str(data.get("player_name") or "").strip()
+        )
         ok, reason = validate_command_for_level(
             normalized,
             level,
@@ -384,7 +499,15 @@ class ARCAIHelperPlugin(Plugin):
             is_bound_self_help=bool(data.get("is_bound_self_help", False)),
         )
         if not ok:
-            return reason or "没有权限：该指令不被允许"
+            deny = reason or "没有权限：该指令不被允许"
+            self._sky_eye_log_agent(
+                detail=(
+                    f"tool=cmd; level={level_display(level)}; "
+                    f"cmd=/{normalized}; status=denied; error={deny[:120]}"
+                ),
+                target_name=caller,
+            )
+            return deny
 
         msg_ret: List[str] = []
         error_ret: List[str] = []
@@ -426,6 +549,13 @@ class ARCAIHelperPlugin(Plugin):
         lines.extend([f"[ERROR] {item}" for item in error_ret])
         output_text = "\n".join(lines) if lines else "无返回值"
         status = "成功" if success else "失败, 请检查命令语法或权限"
+        self._sky_eye_log_agent(
+            detail=(
+                f"tool=cmd; level={level_display(level)}; "
+                f"cmd=/{normalized}; status={'ok' if success else 'fail'}"
+            ),
+            target_name=caller,
+        )
         return f"命令已执行: /{normalized}\n状态: {status}\n输出:\n{output_text}"
 
     def _get_prison_plugin(self):
@@ -1026,7 +1156,8 @@ class ARCAIHelperPlugin(Plugin):
                 "hub_token": "",
                 "server_name": "",
                 "astrbot_timeout": 180,
-                "default_permission_level": "assistant",
+                # AI capability ceiling (天星能做到哪一档)，不是每个玩家的身份。
+                "default_permission_level": "admin",
                 "op_maps_to_admin": True,
                 "permission_overrides": {},
                 "local_agent_max_tool_rounds": 8,
@@ -1082,7 +1213,7 @@ class ARCAIHelperPlugin(Plugin):
         data.setdefault("hub_token", "")
         data.setdefault("server_name", "")
         data.setdefault("astrbot_timeout", 180)
-        data.setdefault("default_permission_level", "assistant")
+        data.setdefault("default_permission_level", "admin")
         data.setdefault("op_maps_to_admin", True)
         data.setdefault("permission_overrides", {})
         data.setdefault("local_agent_max_tool_rounds", 8)
@@ -1374,6 +1505,17 @@ class ARCAIHelperPlugin(Plugin):
 
         header = self._format_assistant_header()
         self.server.broadcast_message(f"{header}\n{reply_text}")
+        level = permission_level
+        if not isinstance(level, AIPermissionLevel):
+            level = self._resolve_permission_level(player=player)
+        preview = reply_text.replace("\n", " ")[:200]
+        self._sky_eye_log_agent(
+            detail=(
+                f"tool=reply; channel={channel or 'public'}; "
+                f"level={level_display(level)}; text={preview}"
+            ),
+            target_name=player_name,
+        )
 
     def _get_arc_core_newbie_guide_text(self) -> str:
         if self._arc_core_newbie_guide_cache is not None:
@@ -1504,13 +1646,36 @@ class ARCAIHelperPlugin(Plugin):
             if not ok:
                 if sender is not None:
                     sender.send_message(f"§c{assistant_tag} {reason or '指令已被拦截'}")
+                self._sky_eye_log_agent(
+                    detail=(
+                        f"tool=execution_command; level={level_display(level)}; "
+                        f"cmd=/{normalized_command_line}; status=denied; "
+                        f"error={(reason or '拦截')[:120]}"
+                    ),
+                    target_name=str(getattr(sender, "name", "") or ""),
+                )
                 continue
 
             try:
                 self.server.dispatch_command(self.server.command_sender, normalized_command_line)
+                self._sky_eye_log_agent(
+                    detail=(
+                        f"tool=execution_command; level={level_display(level)}; "
+                        f"cmd=/{normalized_command_line}; status=ok"
+                    ),
+                    target_name=str(getattr(sender, "name", "") or ""),
+                )
             except Exception as error:
                 if sender is not None:
                     sender.send_message(f"§c{assistant_tag} 执行指令失败: {error}")
+                self._sky_eye_log_agent(
+                    detail=(
+                        f"tool=execution_command; level={level_display(level)}; "
+                        f"cmd=/{normalized_command_line}; status=fail; "
+                        f"error={str(error)[:120]}"
+                    ),
+                    target_name=str(getattr(sender, "name", "") or ""),
+                )
 
         return cleaned_text
 

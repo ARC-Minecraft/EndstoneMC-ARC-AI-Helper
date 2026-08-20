@@ -82,6 +82,24 @@ PROXY_OWNER_ONLY_ROOTS = frozenset(
 )
 
 
+def _proxy_owner_only_root_in_command(normalized: str) -> str:
+    """Return a proxy-owner-only root if present as the command or after ``run``.
+
+    Blocks admin-level ``execute ... run op`` / ``deop`` etc.
+    """
+    parts = str(normalized or "").strip().lstrip("/").lower().split()
+    if not parts:
+        return ""
+    if parts[0] in PROXY_OWNER_ONLY_ROOTS:
+        return parts[0]
+    for index, token in enumerate(parts):
+        if token == "run" and index + 1 < len(parts):
+            nxt = parts[index + 1]
+            if nxt in PROXY_OWNER_ONLY_ROOTS:
+                return nxt
+    return ""
+
+
 # Assistant may only use these roots (plus limited execute).
 ASSISTANT_ALLOWED_ROOTS = frozenset(
     {
@@ -120,33 +138,48 @@ def level_display(level: AIPermissionLevel) -> str:
     return LEVEL_DISPLAY.get(level, "助手")
 
 
-def resolve_permission_level(
+def resolve_ai_capability_ceiling(
+    chat_config: Mapping[str, Any] | None = None,
+) -> AIPermissionLevel:
+    """AI capability ceiling from config (what 天星 itself is allowed to do).
+
+    ``default_permission_level`` / ``ai_capability_level`` describe the agent
+    plugin's power cap, NOT each requester's identity.
+    """
+    cfg = chat_config or {}
+    raw = cfg.get("ai_capability_level")
+    if raw in (None, ""):
+        raw = cfg.get("default_permission_level")
+    # Historical configs used "admin" to mean "天星 has admin tools".
+    return parse_permission_level(raw, AIPermissionLevel.ADMIN)
+
+
+def resolve_requester_level(
     *,
     player: Any = None,
     chat_config: Mapping[str, Any] | None = None,
     payload_level: Any = None,
     payload_is_op: bool = False,
     op_maps_to_admin: bool = True,
+    trust_payload: bool = True,
 ) -> AIPermissionLevel:
-    """Resolve the effective AI permission level for a player or Hub payload."""
+    """Resolve the caller's identity tier (never raised by capability ceiling)."""
     cfg = chat_config or {}
-    default = parse_permission_level(cfg.get("default_permission_level"), AIPermissionLevel.ASSISTANT)
-    level = default
+    level = AIPermissionLevel.ASSISTANT
 
     overrides = cfg.get("permission_overrides") or {}
-    if isinstance(overrides, dict):
+    if isinstance(overrides, dict) and player is not None:
         keys: list[str] = []
-        if player is not None:
-            xuid = str(getattr(player, "xuid", "") or "").strip()
-            name = str(getattr(player, "name", "") or "").strip()
-            if xuid:
-                keys.append(xuid)
-            if name:
-                keys.append(name)
-                keys.append(name.lower())
+        xuid = str(getattr(player, "xuid", "") or "").strip()
+        name = str(getattr(player, "name", "") or "").strip()
+        if xuid:
+            keys.append(xuid)
+        if name:
+            keys.append(name)
+            keys.append(name.lower())
         for key in keys:
             if key in overrides:
-                level = max(level, parse_permission_level(overrides[key], default))
+                level = max(level, parse_permission_level(overrides[key], AIPermissionLevel.ASSISTANT))
                 break
 
     perm_api = getattr(player, "has_permission", None) if player is not None else None
@@ -161,13 +194,38 @@ def resolve_permission_level(
     if op_maps_to_admin and player is not None and bool(getattr(player, "is_op", False)):
         level = max(level, AIPermissionLevel.ADMIN)
 
+    # Local player object wins; ignore hub echo that could self-amplify.
+    if player is not None or not trust_payload:
+        return level
+
     if payload_level not in (None, ""):
-        level = max(level, parse_permission_level(payload_level, default))
+        level = max(level, parse_permission_level(payload_level, AIPermissionLevel.ASSISTANT))
 
     if payload_is_op and op_maps_to_admin:
         level = max(level, AIPermissionLevel.ADMIN)
 
     return level
+
+
+def resolve_permission_level(
+    *,
+    player: Any = None,
+    chat_config: Mapping[str, Any] | None = None,
+    payload_level: Any = None,
+    payload_is_op: bool = False,
+    op_maps_to_admin: bool = True,
+) -> AIPermissionLevel:
+    """Effective level = min(AI capability ceiling, requester identity)."""
+    ceiling = resolve_ai_capability_ceiling(chat_config)
+    requester = resolve_requester_level(
+        player=player,
+        chat_config=chat_config,
+        payload_level=payload_level,
+        payload_is_op=payload_is_op,
+        op_maps_to_admin=op_maps_to_admin,
+        trust_payload=True,
+    )
+    return AIPermissionLevel(min(int(ceiling), int(requester)))
 
 
 def validate_command_for_level(
@@ -188,8 +246,9 @@ def validate_command_for_level(
     if level >= AIPermissionLevel.PROXY_OWNER:
         return True, ""
 
-    if root in PROXY_OWNER_ONLY_ROOTS:
-        return False, f"该指令仅代理服主级别可用: /{root}"
+    forbidden = _proxy_owner_only_root_in_command(normalized)
+    if forbidden:
+        return False, f"该指令仅代理服主级别可用: /{forbidden}"
 
     if is_bound_self_help and level < AIPermissionLevel.ADMIN:
         from .bound_self_help import validate_bound_self_help_command
