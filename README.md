@@ -1,14 +1,13 @@
 ## EndStone ARC AI Helper（弧光 Agent）
-[![Version](https://img.shields.io/badge/version-v2.1.1-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
+[![Version](https://img.shields.io/badge/version-v2.1.2-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 
-一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.1**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
+一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.2**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
 
 支持：
 
 - 订阅 `PlayerChatEvent`，根据触发词自动和玩家对话
-- `/ai` 指令打开 GUI 聊天面板，与 Agent 进行多轮对话
 - **三档 AI 权限**：助手 / 管理员 / 代理服主（指令与弧光核心工具按级别拦截）
 - **双模式工具**：
   - **AstrBot 中枢**：工具由中枢挂载，本插件在游戏服执行
@@ -16,6 +15,26 @@
 - 人格与系统提示严格分开：`persona.txt` 只用于降级人格，`system_prompt.txt` 只写能力
 - 对接弧光核心：银行、领地、传送、天眼（管理员及以上）；**出生点 / Warp / 公共领地**会注入对话上下文，并可用 `mc_landmarks` 刷新
 - 对接监狱插件：一键入狱 / 释放 / 在押名单（管理员及以上）
+
+### 效果预览
+
+公屏喊「天星」或通过 AstrBot 群聊 @Agent，即可用自然语言查服、管银行、查地标、操作监狱等：
+
+#### 银行余额查询（`mc_economy`）
+
+![银行余额查询](docs/images/demo/余额查询.png)
+
+#### 银行批量发放（`mc_economy`）
+
+![银行批量发放](docs/images/demo/银行操作.png)
+
+#### 公共传送点 / 地标查询（`mc_landmarks`）
+
+![公共传送点查询](docs/images/demo/公共传送点查询.png)
+
+#### 监狱释放（`mc_release_player`）
+
+![监狱释放操作](docs/images/demo/监狱操作.png)
 
 ### 推荐运行环境
 
@@ -42,18 +61,9 @@
     你好，我是本服弧光Agent天星，有什么能帮你的？
     ```
 
-- **/ai GUI 聊天面板**
-  - 命令：`/ai`
-  - 仅玩家可用，会打开一个 `ModalForm`：
-    - 上方：以 Label 显示当前玩家与 Agent 的聊天记录。
-    - 下方：TextInput 输入框，用于输入要发送的内容。
-    - 提交后把对话写入该玩家上下文，并自动刷新面板。
-  - 当该玩家还没有聊天历史时，面板顶部会显示一条 **可配置的初始问候语**。
-
 - **上下文管理**
   - 走 **AstrBot** 时：中枢用已绑定的 **QQ 号**当用户 ID（没绑定就用 **XUID**）；本插件送当前这句话、`system_prompt.txt`、玩家 XUID，以及 **AI 权限级别**（`permission_level`）。工具在消息来源服执行。
-  - 走 **本机 Agent** 时：按玩家名维护多轮历史，并把 `persona.txt` + `system_prompt.txt` 作为 system；模型通过 **tools** 调用与中枢相同的能力（查在线、TPS、`mc_run_command`、银行/领地/传送/天眼/监狱等）。若 Provider 不支持 tools，会自动降级为纯文本，并仍可用 `[execution_command:…]`。
-  - `/ai` GUI 面板仍会在本机保存展示用历史。
+  - 走 **本机 Agent** 时：按公屏对话维护多轮历史，并把 `persona.txt` + `system_prompt.txt` 作为 system；模型通过 **tools** 调用与中枢相同的能力（查在线、TPS、`mc_run_command`、银行/领地/传送/天眼/监狱等）。若 Provider 不支持 tools，会自动降级为纯文本，并仍可用 `[execution_command:…]`。
 
 ### 与 AstrBot 弧光消息中心对接（可选）
 
@@ -112,7 +122,6 @@
   "max_queue_size": 10,
   "assistant_title": "弧光Agent",
   "assistant_name": "弧光天星",
-  "gui_greet_message": "你好，我是本服弧光Agent天星，需要查服、传传送、管领地或银行都可以找我。",
   "welcome_message": "欢迎来到弧光大陆服务器，我是服务器弧光Agent天星，喊我的名字天星就可以啦",
   "death_tip_message": "遇到困难了吗？喊我的名字天星，我可以帮你传送或处理问题！",
   "hub_host": "127.0.0.1",
@@ -128,7 +137,7 @@
 ```
 
 - **prefix_triggers** / **contain_triggers**：公屏触发词。
-- **max_history_messages**：本机历史条数上限（GUI / 本机 Agent 上下文）。
+- **max_history_messages**：公屏对话历史条数上限（本机 Agent 上下文）。
 - **assistant_title** / **assistant_name**：聊天前缀头衔与名称（默认「弧光Agent」）。
 - **hub_*** / **server_name** / **astrbot_timeout**：中枢连接（可选）。
 - **default_permission_level** / **op_maps_to_admin** / **permission_overrides**：三档权限。
@@ -159,11 +168,9 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 ]
 ```
 
-### 权限与命令
+### 权限
 
-- **命令**：`/ai` — 打开弧光 Agent 聊天面板。
 - **权限节点**
-  - `arc_ai_helper.command.ai`：使用 `/ai`（默认 `True`）
   - `arc_ai_helper.permission.assistant` / `.admin` / `.proxy_owner`：三档权限
 
 ### 开发与调试建议
@@ -174,6 +181,7 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 
 ### 更新日志
 
+- **2.1.2**：移除 `/ai` GUI 聊天面板，统一通过公屏触发词或 AstrBot 群聊与 Agent 对话；README 新增效果预览截图。
 - **2.1.1**：把弧光核心的出生点、公共传送点、公共领地注入系统提示，并新增只读工具 `mc_landmarks`，方便回答地标/功能建筑。需核心 ≥ 0.8.13。
 - **2.1.0（弧光 Agent）**：不接 AstrBot 时，本机 `providers.json` 也可通过 OpenAI Function Calling 调用全部 `mc_*` 工具；产品定位升级为服务器 Agent；默认头衔「弧光Agent」。
 - **2.0.0**：AI 权限三档；对接弧光核心银行、领地、传送 API；Hub 附带 `permission_level`。

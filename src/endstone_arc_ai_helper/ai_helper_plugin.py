@@ -10,7 +10,6 @@ from datetime import datetime
 
 from endstone.event import PlayerChatEvent, PlayerJoinEvent, PlayerDeathEvent, event_handler
 from endstone.plugin import Plugin
-from endstone.form import ModalForm, Label, TextInput, ActionForm
 
 try:
     from endstone.command import CommandSenderWrapper
@@ -68,19 +67,9 @@ class ARCAIHelperPlugin(Plugin):
     api_version = "0.10"
     load = "POSTWORLD"
 
-    commands = {
-        "ai": {
-            "description": "打开与弧光Agent的聊天面板",
-            "usages": ["/ai"],
-            "permissions": ["arc_ai_helper.command.ai"],
-        }
-    }
+    commands = {}
 
     permissions = {
-        "arc_ai_helper.command.ai": {
-            "description": "允许使用弧光Agent聊天功能",
-            "default": True,
-        },
         "arc_ai_helper.permission.assistant": {
             "description": "弧光Agent权限：助手级别（tp/give/effect 等基础指令）",
             "default": True,
@@ -114,7 +103,6 @@ class ARCAIHelperPlugin(Plugin):
         self.ai_manager = ChatAIManager(self.providers_config_path)
         self.astrbot_client = AstrBotHubChatClient(self)
 
-        self.player_histories: Dict[str, List[Dict[str, str]]] = {}
         self.public_history: List[Dict[str, str]] = []
 
         self.history_lock = threading.Lock()
@@ -858,7 +846,6 @@ class ARCAIHelperPlugin(Plugin):
                 "max_queue_size": 10,
                 "assistant_title": "弧光Agent",
                 "assistant_name": "弧光天星",
-                "gui_greet_message": "你好，我是本服弧光Agent天星，需要查服、传传送、管领地或银行都可以找我。",
                 "welcome_message": "欢迎来到弧光大陆服务器，我是服务器弧光Agent天星，喊我的名字天星就可以啦",
                 "death_tip_message": "遇到困难了吗？喊我的名字天星，我可以帮你传送或处理问题！",
                 "hub_host": "127.0.0.1",
@@ -912,10 +899,6 @@ class ARCAIHelperPlugin(Plugin):
         data.setdefault("max_queue_size", 10)
         data.setdefault("assistant_title", "弧光Agent")
         data.setdefault("assistant_name", "弧光天星")
-        data.setdefault(
-            "gui_greet_message",
-            "你好，我是本服弧光Agent天星，需要查服、传传送、管领地或银行都可以找我。",
-        )
         data.setdefault(
             "welcome_message",
             "欢迎来到弧光大陆服务器，我是服务器弧光Agent天星，喊我的名字天星就可以啦",
@@ -1043,30 +1026,6 @@ class ARCAIHelperPlugin(Plugin):
                 return message[len(prefix) :].lstrip()
         return message
 
-    def _append_history(self, player_name: str, role: str, content: str) -> None:
-        with self.history_lock:
-            self._append_history_unlocked(player_name, role, content)
-
-    def _append_history_unlocked(self, player_name: str, role: str, content: str) -> None:
-        if player_name not in self.player_histories:
-            self.player_histories[player_name] = []
-
-        self.player_histories[player_name].append(
-            {
-                "role": role,
-                "content": content,
-            }
-        )
-
-        max_history = int(self.chat_config.get("max_history_messages", 20))
-        if max_history < 1:
-            max_history = 1
-
-        if len(self.player_histories[player_name]) > max_history:
-            self.player_histories[player_name] = self.player_histories[player_name][
-                -max_history:
-            ]
-
     def _append_public_history(self, speaker_name: str, role: str, content: str) -> None:
         with self.history_lock:
             self._append_public_history_unlocked(speaker_name, role, content)
@@ -1108,11 +1067,7 @@ class ARCAIHelperPlugin(Plugin):
                     is_op = bool(job.get("is_op", False))
                     channel = str(job.get("channel") or job_type or "public")
 
-                    if job_type == "gui":
-                        self._process_gui_job(
-                            player, player_name, user_content, permission_level, is_op, channel
-                        )
-                    elif job_type == "public":
+                    if job_type == "public":
                         self._process_public_job(
                             player, player_name, user_content, permission_level, is_op, channel
                         )
@@ -1205,41 +1160,6 @@ class ARCAIHelperPlugin(Plugin):
             _execute_local_tool,
             max_tool_rounds=max(1, max_rounds),
         )
-
-    def _process_gui_job(
-        self,
-        player,
-        player_name: str,
-        user_text: str,
-        permission_level: AIPermissionLevel | int | None,
-        is_op: bool,
-        channel: str = "gui",
-    ) -> None:
-        assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
-        assistant_tag = f"[{assistant_name}]"
-
-        if player is None:
-            return
-
-        with self.history_lock:
-            self._append_history_unlocked(player_name, "user", user_text)
-
-        success, reply = self._complete_chat(
-            player_name, user_text, permission_level, is_op, channel or "gui", player=player
-        )
-        if not success:
-            player.send_message(f"§c{assistant_tag} AI对话失败: {reply}")
-            self._open_ai_chat_panel(player)
-            return
-
-        reply_text = str(reply).strip()
-        if reply_text:
-            reply_text = self._handle_ai_reply_commands(reply_text, player)
-            if reply_text:
-                with self.history_lock:
-                    self._append_history_unlocked(player_name, "assistant", reply_text)
-
-        self._open_ai_chat_panel(player)
 
     def _process_public_job(
         self, player, player_name: str, user_content: str, permission_level: AIPermissionLevel | int | None, is_op: bool, channel: str = "public"
@@ -1432,28 +1352,6 @@ class ARCAIHelperPlugin(Plugin):
                 }
             )
 
-        history = self.player_histories.get(player_name) or []
-        for item in history:
-            role = item.get("role")
-            content = str(item.get("content") or "").strip()
-            if not content:
-                continue
-
-            if role == "user":
-                speaker_name = player_name
-            elif role == "assistant":
-                speaker_name = str(self.chat_config.get("assistant_name") or "弧光天星")
-            else:
-                speaker_name = ""
-
-            prefix = f"{speaker_name}: " if speaker_name else ""
-            messages.append(
-                {
-                    "role": role or "user",
-                    "content": prefix + content,
-                }
-            )
-
         for item in self.public_history:
             role = item.get("role") or "user"
             name = str(item.get("name") or "").strip()
@@ -1483,15 +1381,6 @@ class ARCAIHelperPlugin(Plugin):
 
         return messages
 
-    def on_command(self, sender, command, args: list[str]) -> bool:
-        if command.name == "ai":
-            if not hasattr(sender, "send_form"):
-                sender.send_message("该命令只能在游戏内由玩家使用。")
-                return True
-            self._open_ai_chat_panel(sender)
-            return True
-        return False
-
     def _format_assistant_header(self) -> str:
         assistant_title = str(self.chat_config.get("assistant_title") or "弧光Agent")
         assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
@@ -1499,98 +1388,6 @@ class ARCAIHelperPlugin(Plugin):
         now = datetime.now()
         time_part = f"{now.year}.{now.month}.{now.day}-{now.hour}:{now.minute:02d}"
         return f"§u[{assistant_title}]§r{assistant_name}({time_part}):"
-
-    def _build_gui_chat_text(self, player_name: str) -> str:
-        history = self.player_histories.get(player_name) or []
-        if not history:
-            greet = str(
-                self.chat_config.get("gui_greet_message")
-                or "你好，我是本服弧光Agent天星，需要查服、传传送、管领地或银行都可以找我。"
-            )
-            return greet
-
-        lines: List[str] = []
-        for item in history:
-            role = item.get("role")
-            content = str(item.get("content") or "").strip()
-            if not content:
-                continue
-            if role == "user":
-                lines.append(f"§7你:§r {content}")
-            elif role == "assistant":
-                lines.append(f"{self._format_assistant_header()}\n{content}")
-            else:
-                lines.append(content)
-        return "\n\n".join(lines) if lines else ""
-
-    def _open_ai_chat_panel(self, player) -> None:
-        player_name = player.name
-        chat_history_text = self._build_gui_chat_text(player_name)
-
-        history_label = Label(text=chat_history_text)
-        input_box = TextInput(
-            label="输入要发送给弧光Agent的内容：",
-            placeholder="在这里输入你的问题或想说的话",
-            default_value="",
-        )
-
-        def handle_submit(sender, data):
-            if not isinstance(data, (list, tuple)) or len(data) < 2:
-                sender.send_message("表单数据异常，请重试。")
-                return
-
-            user_text = str(data[1] or "").strip()
-            if not user_text:
-                self._open_ai_chat_panel(sender)
-                return
-
-            assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
-            assistant_tag = f"[{assistant_name}]"
-
-            max_queue_size = int(self.chat_config.get("max_queue_size", 10))
-            if max_queue_size < 1:
-                max_queue_size = 1
-
-            with self.queue_lock:
-                queue_size = self.request_queue.qsize()
-                if queue_size >= max_queue_size:
-                    sender.send_message(f"§c{assistant_tag} 当前排队人数过多，请稍后再试。")
-                    return
-
-                current_owner = self.current_request_owner
-                position = queue_size + 1
-
-            is_op = bool(getattr(sender, "is_op", False))
-            permission_level = self._resolve_permission_level(player=sender)
-            self.request_queue.put(
-                {
-                    "type": "gui",
-                    "owner_name": sender.name,
-                    "player": sender,
-                    "player_name": sender.name,
-                    "user_content": user_text,
-                    "is_op": is_op,
-                    "permission_level": permission_level,
-                    "channel": "gui",
-                }
-            )
-
-            if current_owner:
-                sender.send_message(
-                    f"§e{assistant_tag} 服务正忙，正在处理 {current_owner} 的请求。"
-                    f"你的请求已加入队列（第 {position} 位）。"
-                )
-            else:
-                sender.send_message(f"§7{assistant_tag} 已收到请求，正在排队处理中（第 {position} 位）。")
-
-        form = ModalForm(
-            title="与弧光Agent聊天",
-            controls=[history_label, input_box],
-            on_submit=handle_submit,
-            on_close=lambda s: None,
-        )
-
-        player.send_form(form)
 
     @event_handler
     def on_player_chat(self, event: PlayerChatEvent) -> None:
