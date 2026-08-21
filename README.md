@@ -1,9 +1,9 @@
 ## EndStone ARC AI Helper（弧光 Agent）
-[![Version](https://img.shields.io/badge/version-v2.1.6-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
+[![Version](https://img.shields.io/badge/version-v2.1.8-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 
-一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.6**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
+一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.8**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
 
 支持：
 
@@ -183,6 +183,7 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 
 ### 更新日志
 
+- **2.1.8**：天星执行的游戏指令写入天眼 `AgentCommand`，挂在请求者玩家名下（查该玩家可见）；不再把每条聊天回复刷进天眼。需弧光核心 ≥ 0.8.16。
 - **2.1.7**：对接 UpsAndDowns：新增 `mc_stock_leaderboard` / `mc_stock_quote`（只读）；本地 Agent 与 AstrBot 中枢均可调用。需 UpsAndDowns ≥ 0.5.2、中枢 ≥ 1.7.8。
 - **2.1.6**：修复权限模型——`default_permission_level` 仅表示天星能力上限，与请求者身份取小后生效（普通玩家不再因配置为 admin 而获得管理员工具）；天星指令与改动类工具写入天眼（`AiAgent`）；管理员档禁止 `op`/`deop`（含 `execute ... run op`）。需弧光核心 ≥ 0.8.14。
 - **2.1.5**：绑定/查玩家统一走 `player_basic_info` 动作，内部调用弧光核心 `api_get_player_xuid_by_name` + `api_get_player_playtime`（跨服共通库）；修复 `_tool_player_basic_info` 未定义导致绑定失败。需中枢 ≥ 1.7.3。

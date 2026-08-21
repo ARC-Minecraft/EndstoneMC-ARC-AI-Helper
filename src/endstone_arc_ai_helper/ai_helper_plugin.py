@@ -348,28 +348,23 @@ class ARCAIHelperPlugin(Plugin):
         ]
         if caller:
             bits.append(f"caller={caller}")
-        if name == "cmd":
-            cmd = str(payload.get("command") or "").strip()
-            if cmd:
-                bits.append(f"cmd=/{cmd.lstrip('/')}")
-        else:
-            for key in (
-                "sub_action",
-                "player_name",
-                "targets",
-                "amount",
-                "delta",
-                "minutes",
-                "reason",
-                "home_name",
-                "warp_name",
-                "x",
-                "y",
-                "z",
-            ):
-                val = str(payload.get(key) or "").strip()
-                if val:
-                    bits.append(f"{key}={val}")
+        for key in (
+            "sub_action",
+            "player_name",
+            "targets",
+            "amount",
+            "delta",
+            "minutes",
+            "reason",
+            "home_name",
+            "warp_name",
+            "x",
+            "y",
+            "z",
+        ):
+            val = str(payload.get(key) or "").strip()
+            if val:
+                bits.append(f"{key}={val}")
         if result.get("ok"):
             bits.append("status=ok")
         else:
@@ -378,9 +373,21 @@ class ARCAIHelperPlugin(Plugin):
             if err:
                 bits.append(f"error={err[:120]}")
         detail = "; ".join(bits)
-        self._sky_eye_log_agent(detail=detail, target_name=caller)
+        self._sky_eye_log_agent(
+            detail=detail,
+            requester_name=caller,
+            action="AiAgent",
+        )
 
-    def _sky_eye_log_agent(self, *, detail: str, target_name: str = "") -> None:
+    def _sky_eye_log_agent(
+        self,
+        *,
+        detail: str,
+        requester_name: str = "",
+        target_name: str = "",
+        action: str = "AiAgent",
+    ) -> None:
+        """Write Agent activity. Commands use AgentCommand under the requester's name."""
         core = self._get_arc_core_plugin()
         if core is None:
             return
@@ -388,17 +395,77 @@ class ARCAIHelperPlugin(Plugin):
         if not callable(logger_api):
             return
         agent_name = str(self.chat_config.get("assistant_name") or "弧光天星").strip()
+        agent_name = agent_name or "弧光天星"
+        requester = str(requester_name or target_name or "").strip()
+        act = str(action or "AiAgent").strip() or "AiAgent"
+        # Attribute command rows to the requesting player so player sky-eye queries find them.
+        if act == "AgentCommand" and requester:
+            subject_name = requester
+            subject_xuid = ""
+            try:
+                player = self.server.get_player(requester)
+                if player is not None:
+                    subject_xuid = str(getattr(player, "xuid", "") or "").strip()
+            except Exception:
+                pass
+            final_detail = f"by={agent_name}; {str(detail or '')[:450]}"
+            final_target = agent_name
+        else:
+            subject_name = agent_name
+            subject_xuid = ""
+            final_detail = str(detail or "")[:500]
+            final_target = requester
         try:
             logger_api(
-                "AiAgent",
-                player_name=agent_name or "弧光天星",
-                player_xuid="",
-                detail=str(detail or "")[:500],
-                target_name=str(target_name or "").strip(),
-                target_type="player" if target_name else "",
+                act,
+                player_name=subject_name,
+                player_xuid=subject_xuid,
+                detail=final_detail,
+                target_name=final_target,
+                target_type="player" if final_target else "",
+                resolve_online=bool(subject_xuid) or (act != "AgentCommand"),
             )
+        except TypeError:
+            # Older arc_core without resolve_online.
+            try:
+                logger_api(
+                    act,
+                    player_name=subject_name,
+                    player_xuid=subject_xuid,
+                    detail=final_detail,
+                    target_name=final_target,
+                    target_type="player" if final_target else "",
+                )
+            except Exception as error:
+                self.logger.debug(f"[ARC AI Helper] 天眼留档失败: {error}")
         except Exception as error:
             self.logger.debug(f"[ARC AI Helper] 天眼留档失败: {error}")
+
+    def _sky_eye_log_agent_command(
+        self,
+        *,
+        command: str,
+        level: AIPermissionLevel,
+        status: str,
+        requester_name: str = "",
+        error: str = "",
+        via: str = "cmd",
+    ) -> None:
+        """Record a console command executed (or denied) by 天星."""
+        cmd = str(command or "").strip().lstrip("/")
+        bits = [
+            f"via={via}",
+            f"level={level_display(level)}",
+            f"cmd=/{cmd}" if cmd else "cmd=",
+            f"status={status}",
+        ]
+        if error:
+            bits.append(f"error={str(error)[:120]}")
+        self._sky_eye_log_agent(
+            detail="; ".join(bits),
+            requester_name=requester_name,
+            action="AgentCommand",
+        )
 
     def _tool_list_players(self) -> str:
         online_players = list(self.server.online_players or [])
@@ -505,12 +572,13 @@ class ARCAIHelperPlugin(Plugin):
         )
         if not ok:
             deny = reason or "没有权限：该指令不被允许"
-            self._sky_eye_log_agent(
-                detail=(
-                    f"tool=cmd; level={level_display(level)}; "
-                    f"cmd=/{normalized}; status=denied; error={deny[:120]}"
-                ),
-                target_name=caller,
+            self._sky_eye_log_agent_command(
+                command=normalized,
+                level=level,
+                status="denied",
+                requester_name=caller,
+                error=deny,
+                via="cmd",
             )
             return deny
 
@@ -554,12 +622,12 @@ class ARCAIHelperPlugin(Plugin):
         lines.extend([f"[ERROR] {item}" for item in error_ret])
         output_text = "\n".join(lines) if lines else "无返回值"
         status = "成功" if success else "失败, 请检查命令语法或权限"
-        self._sky_eye_log_agent(
-            detail=(
-                f"tool=cmd; level={level_display(level)}; "
-                f"cmd=/{normalized}; status={'ok' if success else 'fail'}"
-            ),
-            target_name=caller,
+        self._sky_eye_log_agent_command(
+            command=normalized,
+            level=level,
+            status="ok" if success else "fail",
+            requester_name=caller,
+            via="cmd",
         )
         return f"命令已执行: /{normalized}\n状态: {status}\n输出:\n{output_text}"
 
@@ -1559,17 +1627,7 @@ class ARCAIHelperPlugin(Plugin):
 
         header = self._format_assistant_header()
         self.server.broadcast_message(f"{header}\n{reply_text}")
-        level = permission_level
-        if not isinstance(level, AIPermissionLevel):
-            level = self._resolve_permission_level(player=player)
-        preview = reply_text.replace("\n", " ")[:200]
-        self._sky_eye_log_agent(
-            detail=(
-                f"tool=reply; channel={channel or 'public'}; "
-                f"level={level_display(level)}; text={preview}"
-            ),
-            target_name=player_name,
-        )
+        # 不把普通回复写入天眼，避免淹没真正的指令/改动记录。
 
     def _get_arc_core_newbie_guide_text(self) -> str:
         if self._arc_core_newbie_guide_cache is not None:
@@ -1709,35 +1767,35 @@ class ARCAIHelperPlugin(Plugin):
             if not ok:
                 if sender is not None:
                     sender.send_message(f"§c{assistant_tag} {reason or '指令已被拦截'}")
-                self._sky_eye_log_agent(
-                    detail=(
-                        f"tool=execution_command; level={level_display(level)}; "
-                        f"cmd=/{normalized_command_line}; status=denied; "
-                        f"error={(reason or '拦截')[:120]}"
-                    ),
-                    target_name=str(getattr(sender, "name", "") or ""),
+                self._sky_eye_log_agent_command(
+                    command=normalized_command_line,
+                    level=level,
+                    status="denied",
+                    requester_name=str(getattr(sender, "name", "") or ""),
+                    error=reason or "拦截",
+                    via="execution_command",
                 )
                 continue
 
             try:
                 self.server.dispatch_command(self.server.command_sender, normalized_command_line)
-                self._sky_eye_log_agent(
-                    detail=(
-                        f"tool=execution_command; level={level_display(level)}; "
-                        f"cmd=/{normalized_command_line}; status=ok"
-                    ),
-                    target_name=str(getattr(sender, "name", "") or ""),
+                self._sky_eye_log_agent_command(
+                    command=normalized_command_line,
+                    level=level,
+                    status="ok",
+                    requester_name=str(getattr(sender, "name", "") or ""),
+                    via="execution_command",
                 )
             except Exception as error:
                 if sender is not None:
                     sender.send_message(f"§c{assistant_tag} 执行指令失败: {error}")
-                self._sky_eye_log_agent(
-                    detail=(
-                        f"tool=execution_command; level={level_display(level)}; "
-                        f"cmd=/{normalized_command_line}; status=fail; "
-                        f"error={str(error)[:120]}"
-                    ),
-                    target_name=str(getattr(sender, "name", "") or ""),
+                self._sky_eye_log_agent_command(
+                    command=normalized_command_line,
+                    level=level,
+                    status="fail",
+                    requester_name=str(getattr(sender, "name", "") or ""),
+                    error=str(error),
+                    via="execution_command",
                 )
 
         return cleaned_text
