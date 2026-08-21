@@ -21,6 +21,7 @@ TOOL_NAME_TO_ACTION: Dict[str, str] = {
     "mc_skyeye_location": "skyeye_location",
     "mc_stock_leaderboard": "stock_leaderboard",
     "mc_stock_quote": "stock_quote",
+    "mc_player_ip": "player_ip",
 }
 
 
@@ -76,6 +77,18 @@ def build_local_agent_tools(
                 }
             },
             ["command"],
+        ),
+        _fn(
+            "mc_player_ip",
+            "查询本服在线玩家的连接 IP（原始地址）。"
+            "需要做天气问候、IP 地理定位等时先调用本工具拿到 ip= 字段，再把该 IP 原样传给你的其它工具。"
+            "不填 player_name 则查当前对话玩家；助手只能查自己，管理员可查任意在线玩家。",
+            {
+                "player_name": {
+                    "type": "string",
+                    "description": "可选；目标玩家名，默认当前对话玩家",
+                }
+            },
         ),
     ]
     if has_prison:

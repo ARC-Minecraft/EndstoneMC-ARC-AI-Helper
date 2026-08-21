@@ -302,6 +302,8 @@ class ARCAIHelperPlugin(Plugin):
                 text = self._tool_stock_leaderboard(payload)
             elif name in ("stock_quote", "stock_price", "stock"):
                 text = self._tool_stock_quote(payload)
+            elif name in ("player_ip", "player_locale", "player_geo", "geo_locale", "locale", "geo"):
+                text = self._run_on_server_thread(lambda: self._tool_player_ip(payload))
             else:
                 return {"ok": False, "error": f"未知工具动作: {action}"}
             result = {"ok": True, "text": str(text or "").strip() or "（无返回）"}
@@ -687,6 +689,48 @@ class ARCAIHelperPlugin(Plugin):
             return "股票代码为空"
         period = str(payload.get("period") or payload.get("range") or "day").strip()
         return str(api(symbol, period) or "（无行情数据）")
+
+    def _tool_player_ip(self, payload: Dict[str, Any]) -> str:
+        """Return an online player's connection IP for downstream tools."""
+        from .geo_locale import extract_player_ip
+
+        data = payload if isinstance(payload, dict) else {}
+        level = self._resolve_permission_level(payload=data)
+        caller = (
+            str(data.get("caller_player_name") or "").strip()
+            or str(data.get("bound_player_name") or "").strip()
+        )
+        target_name = str(
+            data.get("target_player_name")
+            or data.get("player_name")
+            or caller
+            or ""
+        ).strip()
+        if not target_name:
+            return "请指定要查询的在线玩家名"
+        # 他人 IP 敏感：非管理员只能查自己
+        if (
+            caller
+            and target_name.lower() != caller.lower()
+            and level < AIPermissionLevel.ADMIN
+        ):
+            return "没有权限：助手级别只能查询自己的连接 IP；查他人需管理员。"
+
+        player = self.server.get_player(target_name)
+        if player is None:
+            lowered = target_name.lower()
+            for online in list(self.server.online_players or []):
+                if str(getattr(online, "name", "") or "").lower() == lowered:
+                    player = online
+                    break
+        if player is None:
+            return f"玩家 {target_name} 不在本服在线，无法读取连接 IP"
+        real_name = str(getattr(player, "name", "") or target_name).strip()
+        ip = extract_player_ip(player)
+        if not ip:
+            return f"玩家 {real_name} 无法读取连接地址"
+        # 结构化输出，方便模型把 ip 原样传给其它工具
+        return f"player_name={real_name}\nip={ip}"
 
     def _tool_require_admin(self, payload: Dict[str, Any]) -> str:
         level = self._resolve_permission_level(payload=payload)
@@ -1683,6 +1727,8 @@ class ARCAIHelperPlugin(Plugin):
         parts.append(
             "【弧光Agent】无论是否连接 AstrBot，都应优先通过工具完成查服、执行指令、"
             "银行/领地/传送/天眼/监狱等操作；不要编造工具本可查询的数据。"
+            "需要玩家真实世界位置、天气问候等时：先调用 mc_player_ip 取得 ip= 字段，"
+            "再把该 IP 原样传给你可用的地理/天气类工具，禁止编造 IP。"
         )
         newbie_guide_text = self._get_arc_core_newbie_guide_text()
         if newbie_guide_text:
