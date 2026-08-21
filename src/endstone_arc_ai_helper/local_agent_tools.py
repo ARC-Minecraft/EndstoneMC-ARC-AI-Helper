@@ -19,6 +19,8 @@ TOOL_NAME_TO_ACTION: Dict[str, str] = {
     "mc_skyeye_player": "skyeye_player",
     "mc_skyeye_combat": "skyeye_combat",
     "mc_skyeye_location": "skyeye_location",
+    "mc_stock_leaderboard": "stock_leaderboard",
+    "mc_stock_quote": "stock_quote",
 }
 
 
@@ -39,7 +41,12 @@ def _fn(name: str, description: str, properties: Dict[str, Any], required: List[
     }
 
 
-def build_local_agent_tools(*, has_prison: bool = False, has_arc_core: bool = False) -> List[Dict[str, Any]]:
+def build_local_agent_tools(
+    *,
+    has_prison: bool = False,
+    has_arc_core: bool = False,
+    has_stock: bool = False,
+) -> List[Dict[str, Any]]:
     """Return OpenAI tools list for local Agent loop."""
     tools: List[Dict[str, Any]] = [
         _fn(
@@ -97,6 +104,51 @@ def build_local_agent_tools(*, has_prison: bool = False, has_arc_core: bool = Fa
                     "mc_list_prisoners",
                     "查看当前在押名单。",
                     {},
+                ),
+            ]
+        )
+    if has_stock:
+        tools.extend(
+            [
+                _fn(
+                    "mc_stock_leaderboard",
+                    "查询服务器模拟美股插件玩家盈亏排行榜（高手榜/接盘侠榜）。"
+                    "问谁赚最多、收益率排行、某玩家股票盈亏时必须调用，禁止编造。"
+                    "只读，助手级别也可用。",
+                    {
+                        "mode": {
+                            "type": "string",
+                            "description": "relative=收益率（默认）/ absolute=绝对盈亏金额",
+                        },
+                        "top": {
+                            "type": "string",
+                            "description": "前 N 名，默认 5",
+                        },
+                        "bottom": {
+                            "type": "string",
+                            "description": "倒数 N 名，默认 5",
+                        },
+                        "player_name": {
+                            "type": "string",
+                            "description": "可选；只查该玩家名次与盈亏",
+                        },
+                    },
+                ),
+                _fn(
+                    "mc_stock_quote",
+                    "查询单只股票/加密货币现价或走势（AAPL、TSLA、BTC-USD 等）。"
+                    "问股价、涨跌、走势时必须调用，禁止编造。只读。",
+                    {
+                        "symbol": {
+                            "type": "string",
+                            "description": "股票代码，如 AAPL",
+                        },
+                        "period": {
+                            "type": "string",
+                            "description": "price=仅现价；minute/day/month=走势，默认 day",
+                        },
+                    },
+                    ["symbol"],
                 ),
             ]
         )

@@ -246,7 +246,7 @@ class ARCAIHelperPlugin(Plugin):
 
         Args:
             action: ``list`` / ``tps`` / ``info`` / ``cmd`` / ``jail`` / ``release`` / ``prisoners`` /
-                ``skyeye_*`` / ``economy`` / ``land`` / ``arc_tp``.
+                ``skyeye_*`` / ``economy`` / ``land`` / ``arc_tp`` / ``stock_leaderboard`` / ``stock_quote``.
             args: Extra arguments, including ``command`` / ``is_op`` / ``permission_level``.
 
         Returns:
@@ -297,6 +297,11 @@ class ARCAIHelperPlugin(Plugin):
                 text = self._run_on_server_thread(lambda: self._tool_skyeye_combat(payload))
             elif name in ("skyeye_location", "sky_eye_location"):
                 text = self._run_on_server_thread(lambda: self._tool_skyeye_location(payload))
+            elif name in ("stock_leaderboard", "stock_rank", "stock_leader"):
+                # yfinance / sqlite 可在工作线程执行，避免阻塞主线程
+                text = self._tool_stock_leaderboard(payload)
+            elif name in ("stock_quote", "stock_price", "stock"):
+                text = self._tool_stock_quote(payload)
             else:
                 return {"ok": False, "error": f"未知工具动作: {action}"}
             result = {"ok": True, "text": str(text or "").strip() or "（无返回）"}
@@ -566,6 +571,54 @@ class ARCAIHelperPlugin(Plugin):
             return plugin_manager.get_plugin("arc_prison")
         except Exception:
             return None
+
+    def _get_stock_plugin(self):
+        plugin_manager = getattr(self.server, "plugin_manager", None)
+        if plugin_manager is None:
+            return None
+        for name in ("up_and_down", "up-and-down"):
+            try:
+                plug = plugin_manager.get_plugin(name)
+            except Exception:
+                plug = None
+            if plug is not None:
+                return plug
+        return None
+
+    def _tool_stock_leaderboard(self, payload: Dict[str, Any]) -> str:
+        stock = self._get_stock_plugin()
+        if stock is None:
+            return "本服未安装股票插件 up_and_down"
+        api = getattr(stock, "api_get_leaderboard_text", None)
+        if not callable(api):
+            return "股票插件版本过旧，没有排行榜查询接口（需 ≥ 0.5.2）"
+        return str(
+            api(
+                mode=str(payload.get("mode") or "relative"),
+                top=payload.get("top", 5),
+                bottom=payload.get("bottom", 5),
+                player_name=str(payload.get("player_name") or "").strip(),
+            )
+            or "（无排行榜数据）"
+        )
+
+    def _tool_stock_quote(self, payload: Dict[str, Any]) -> str:
+        stock = self._get_stock_plugin()
+        if stock is None:
+            return "本服未安装股票插件 up_and_down"
+        api = getattr(stock, "api_get_stock_quote_text", None)
+        if not callable(api):
+            return "股票插件版本过旧，没有行情查询接口（需 ≥ 0.5.2）"
+        symbol = str(
+            payload.get("symbol")
+            or payload.get("stock")
+            or payload.get("ticker")
+            or ""
+        ).strip()
+        if not symbol:
+            return "股票代码为空"
+        period = str(payload.get("period") or payload.get("range") or "day").strip()
+        return str(api(symbol, period) or "（无行情数据）")
 
     def _tool_require_admin(self, payload: Dict[str, Any]) -> str:
         level = self._resolve_permission_level(payload=payload)
@@ -1441,6 +1494,7 @@ class ARCAIHelperPlugin(Plugin):
         tools = build_local_agent_tools(
             has_prison=self._get_prison_plugin() is not None,
             has_arc_core=self._get_arc_core_plugin() is not None,
+            has_stock=self._get_stock_plugin() is not None,
         )
         level_value = int(level)
         is_admin = level >= AIPermissionLevel.ADMIN
@@ -1585,6 +1639,15 @@ class ARCAIHelperPlugin(Plugin):
                 "reason 是入狱原因，会写入监狱插件，可留空。"
                 "释放用 mc_release_player，查看在押名单用 mc_list_prisoners。"
                 "入狱和释放只有管理员及以上级别可以执行。"
+            )
+        if self._get_stock_plugin() is not None:
+            parts.append(
+                "本服已安装模拟美股插件 UpsAndDowns。"
+                "查询玩家股票盈亏排行、谁赚最多/亏最多时必须调用 mc_stock_leaderboard，"
+                "禁止编造排行或盈亏数字。"
+                "查询某只股票现价或走势（AAPL/TSLA/BTC-USD 等）必须调用 mc_stock_quote，"
+                "period 可用 price/minute/day/month。"
+                "这两个工具只读，助手级别也可用。"
             )
         if self._get_arc_core_plugin() is not None:
             landmarks_text = self._get_arc_core_landmarks_text()

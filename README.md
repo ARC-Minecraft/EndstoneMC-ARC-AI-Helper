@@ -93,6 +93,8 @@
 | `mc_skyeye_player` | 仅管理员 | `player_name`, `minutes`, `action`, `server` | `player_name` | `minutes=30`，其余空 | 位置与近期行为。**不要求在线** |
 | `mc_skyeye_combat` | 仅管理员 | `player_name`, `minutes`, `server` | `player_name` | `minutes=30` | 打架 / 被打 / 死亡 |
 | `mc_skyeye_location` | 仅管理员 | `x`, `y`, `z`, `radius`, `dimension`, `minutes`, `server` | `x`/`y`/`z` | `radius=8`，`minutes=30` | 坐标附近活动 |
+| `mc_stock_leaderboard` | 已激活即可（只读） | `mode`, `top`, `bottom`, `player_name`, `server` | | `mode=relative`，`top/bottom=5` | 模拟美股玩家盈亏排行；需 UpsAndDowns |
+| `mc_stock_quote` | 已激活即可（只读） | `symbol`, `period`, `server` | `symbol` | `period=day` | 单票现价/走势；需 UpsAndDowns |
 
 游戏内调用时 `server` 可留空（本服执行）。QQ 侧须先 `/mc activate`。
 
@@ -181,6 +183,7 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 
 ### 更新日志
 
+- **2.1.7**：对接 UpsAndDowns：新增 `mc_stock_leaderboard` / `mc_stock_quote`（只读）；本地 Agent 与 AstrBot 中枢均可调用。需 UpsAndDowns ≥ 0.5.2、中枢 ≥ 1.7.8。
 - **2.1.6**：修复权限模型——`default_permission_level` 仅表示天星能力上限，与请求者身份取小后生效（普通玩家不再因配置为 admin 而获得管理员工具）；天星指令与改动类工具写入天眼（`AiAgent`）；管理员档禁止 `op`/`deop`（含 `execute ... run op`）。需弧光核心 ≥ 0.8.14。
 - **2.1.5**：绑定/查玩家统一走 `player_basic_info` 动作，内部调用弧光核心 `api_get_player_xuid_by_name` + `api_get_player_playtime`（跨服共通库）；修复 `_tool_player_basic_info` 未定义导致绑定失败。需中枢 ≥ 1.7.3。
 - **2.1.4**：`/mc 绑定` 改为调用弧光核心玩家解析确认角色；`mc_economy` 新增 `transfer` 发红包。需中枢 ≥ 1.7.2。
