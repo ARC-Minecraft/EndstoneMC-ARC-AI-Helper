@@ -9,7 +9,11 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
-dist/
+# dist/: track latest *.whl only; ignore other packaging artifacts
+dist/*.tar.gz
+dist/*.tar.bz2
+dist/*.zip
+dist/*.egg
 develop-eggs/
 downloads/
 eggs/
