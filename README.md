@@ -1,9 +1,9 @@
 ## EndStone ARC AI Helper（弧光 Agent）
-[![Version](https://img.shields.io/badge/version-v2.1.9-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
+[![Version](https://img.shields.io/badge/version-v2.1.10-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 
-一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.9**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
+一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.10**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
 
 支持：
 
@@ -90,9 +90,10 @@
 | `mc_jail_player` | 仅管理员 | `player_name`, `minutes`, `reason`, `server` | 仅 `player_name` | `minutes`/`reason`/`server` 空 | `minutes` 为刑期分钟，`-1`/`无期` 为无期；`reason` 写入监狱插件 |
 | `mc_release_player` | 仅管理员 | `player_name`, `server` | `player_name` | `server` 空 | 释放在押玩家 |
 | `mc_list_prisoners` | 已激活即可 | `server` | 多开服时要填 | 空 | 当前在押名单 |
-| `mc_skyeye_player` | 仅管理员 | `player_name`, `minutes`, `action`, `server` | `player_name` | `minutes=30`，其余空 | 位置与近期行为。**不要求在线** |
-| `mc_skyeye_combat` | 仅管理员 | `player_name`, `minutes`, `server` | `player_name` | `minutes=30` | 打架 / 被打 / 死亡 |
-| `mc_skyeye_location` | 仅管理员 | `x`, `y`, `z`, `radius`, `dimension`, `minutes`, `server` | `x`/`y`/`z` | `radius=8`，`minutes=30` | 坐标附近活动 |
+| `mc_skyeye_player` | 仅管理员 | `player_name`, `minutes`, `action`, `server` | `player_name` | `minutes=30`，其余空 | 位置与近期行为。**不要求在线**；名字**模糊匹配** |
+| `mc_skyeye_combat` | 仅管理员 | `player_name`, `minutes`, `event_kind`, `server` | 无 | `minutes=30`，`event_kind=combat` | 打架 / 被打 / 死亡；`player_name` 可空=全服；`event_kind`=`combat`/`pvp`/`pve`/`death`/`pvp_death` |
+| `mc_skyeye_events` | 仅管理员 | `action`, `player_name`, `minutes`, `server` | `action` | `minutes=30` | **按事件类型查**（如 `death`/`pvp`）；可不传玩家名。问「谁死了」用本工具 |
+| `mc_skyeye_location` | 仅管理员 | `x`, `y`, `z`, `radius`, `dimension`, `minutes`, `action`, `server` | `x`/`y`/`z` | `radius=8`，`minutes=30` | 坐标附近活动；可按 `action` 过滤 |
 | `mc_stock_leaderboard` | 已激活即可（只读） | `mode`, `top`, `bottom`, `player_name`, `server` | | `mode=relative`，`top/bottom=5` | 模拟美股玩家盈亏排行；需 UpsAndDowns |
 | `mc_stock_quote` | 已激活即可（只读） | `symbol`, `period`, `server` | `symbol` | `period=day` | 单票现价/走势；需 UpsAndDowns |
 | `mc_player_ip` | 已激活即可（只读） | `player_name`, `server` | | 当前对话玩家 | 在线玩家连接原始 IP（`ip=`）；助手仅查自己 |
@@ -180,10 +181,11 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 
 - 本机 Agent：确认 `providers.json` 的 `base_url`、密钥与模型支持 tools。
 - 有中枢时优先连 `ws://127.0.0.1:19136`（≥ 1.5.0）。
-- 银行 / 领地 / 传送 / 扩展天眼需弧光核心 ≥ **0.8.12**；地标清单需 ≥ **0.8.13**。
+- 银行 / 领地 / 传送 / 扩展天眼需弧光核心 ≥ **0.8.12**；地标清单需 ≥ **0.8.13**；天眼模糊名 / 按事件类型全服查询需 ≥ **0.9.27**。
 
 ### 更新日志
 
+- **2.1.10**：天眼支持模糊玩家名；新增 `mc_skyeye_events`（按事件类型查全服，如最近谁死了）；`mc_skyeye_combat` 玩家名可空并支持 `event_kind`（pvp/pve/death 等）。需弧光核心 ≥ 0.9.27。
 - **2.1.9**：新增只读工具 `mc_player_ip`，返回在线玩家连接原始 IP（`ip=`），供模型传给下游地理/天气工具。需中枢 ≥ 1.7.9。
 - **2.1.8**：天星执行的游戏指令写入天眼 `AgentCommand`，挂在请求者玩家名下（查该玩家可见）；不再把每条聊天回复刷进天眼。需弧光核心 ≥ 0.8.16。
 - **2.1.7**：对接 UpsAndDowns：新增 `mc_stock_leaderboard` / `mc_stock_quote`（只读）；本地 Agent 与 AstrBot 中枢均可调用。需 UpsAndDowns ≥ 0.5.2、中枢 ≥ 1.7.8。

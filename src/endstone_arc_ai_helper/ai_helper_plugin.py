@@ -295,6 +295,8 @@ class ARCAIHelperPlugin(Plugin):
                 text = self._run_on_server_thread(lambda: self._tool_skyeye_player(payload))
             elif name in ("skyeye_combat", "sky_eye_combat"):
                 text = self._run_on_server_thread(lambda: self._tool_skyeye_combat(payload))
+            elif name in ("skyeye_events", "sky_eye_events", "skyeye_event", "sky_eye_event"):
+                text = self._run_on_server_thread(lambda: self._tool_skyeye_events(payload))
             elif name in ("skyeye_location", "sky_eye_location"):
                 text = self._run_on_server_thread(lambda: self._tool_skyeye_location(payload))
             elif name in ("stock_leaderboard", "stock_rank", "stock_leader"):
@@ -859,7 +861,7 @@ class ARCAIHelperPlugin(Plugin):
         player_now = getattr(core, "api_sky_eye_player_now", None)
         player_name = str(payload.get("player_name") or "").strip()
         if not player_name:
-            return "玩家名为空"
+            return "查指定玩家行为时需要玩家名；若要查全服某类事件请用 mc_skyeye_events（如 action=death）"
         minutes = self._parse_skyeye_minutes(payload, 30)
         action = str(payload.get("action") or "").strip()
         parts: List[str] = []
@@ -867,7 +869,16 @@ class ARCAIHelperPlugin(Plugin):
             now_info = player_now(player_name=player_name)
             if isinstance(now_info, dict) and now_info.get("source"):
                 name = now_info.get("player_name") or player_name
-                if now_info.get("online") and now_info.get("x") is not None:
+                matches = now_info.get("name_matches") or []
+                if now_info.get("source") == "ambiguous_online":
+                    parts.append(
+                        f"在线匹配到多人，请说清楚是哪一个：{'、'.join(str(m) for m in matches)}"
+                    )
+                elif now_info.get("source") == "name_suggestions":
+                    parts.append(
+                        f"未精确命中「{player_name}」，天眼近期相似名：{'、'.join(str(m) for m in matches)}"
+                    )
+                elif now_info.get("online") and now_info.get("x") is not None:
                     pos = f"{float(now_info.get('x')):.1f},{float(now_info.get('y')):.1f},{float(now_info.get('z')):.1f}"
                     land = "荒野"
                     if now_info.get("in_land"):
@@ -887,7 +898,8 @@ class ARCAIHelperPlugin(Plugin):
                     player_name=player_name,
                     action=action,
                     minutes=minutes,
-                    heading=f"{player_name} 近 {minutes} 分钟行为",
+                    name_fuzzy=True,
+                    heading=f"{player_name} 近 {minutes} 分钟行为（模糊名）",
                 )
             )
         else:
@@ -905,14 +917,46 @@ class ARCAIHelperPlugin(Plugin):
         if not callable(query_text):
             return "弧光核心版本过旧，没有天眼查询接口"
         player_name = str(payload.get("player_name") or "").strip()
-        if not player_name:
-            return "玩家名为空"
         minutes = self._parse_skyeye_minutes(payload, 30)
+        event_kind = str(
+            payload.get("event_kind") or payload.get("action") or "combat"
+        ).strip() or "combat"
+        who = player_name if player_name else "全服"
         return query_text(
             player_name=player_name,
             minutes=minutes,
-            combat_role="both",
-            heading=f"{player_name} 近 {minutes} 分钟战斗（打了谁 / 被谁打 / 死亡）",
+            combat_role="both" if player_name else "",
+            action=event_kind,
+            name_fuzzy=True,
+            heading=f"{who} 近 {minutes} 分钟战斗（{event_kind}）",
+        )
+
+    def _tool_skyeye_events(self, payload: Dict[str, Any]) -> str:
+        denied = self._tool_skyeye_require_admin(payload)
+        if denied:
+            return denied
+        core = self._get_arc_core_plugin()
+        if core is None:
+            return "本服未安装弧光核心 arc_core"
+        query_text = getattr(core, "api_sky_eye_query_text", None)
+        if not callable(query_text):
+            return "弧光核心版本过旧，没有天眼查询接口（需 ≥0.9.27）"
+        action = str(payload.get("action") or payload.get("event_kind") or "").strip()
+        if not action:
+            return (
+                "请传入 action（事件类型）。例如 death=死亡、pvp=玩家互殴、"
+                "pve=打怪、combat=战斗、join/quit/break/place/chat 等"
+            )
+        player_name = str(payload.get("player_name") or "").strip()
+        minutes = self._parse_skyeye_minutes(payload, 30)
+        who = player_name if player_name else "全服"
+        return query_text(
+            player_name=player_name,
+            action=action,
+            minutes=minutes,
+            name_fuzzy=True,
+            limit=80,
+            heading=f"{who} 近 {minutes} 分钟事件（{action}）",
         )
 
     def _tool_skyeye_location(self, payload: Dict[str, Any]) -> str:
@@ -937,6 +981,7 @@ class ARCAIHelperPlugin(Plugin):
             radius = 8.0
         minutes = self._parse_skyeye_minutes(payload, 30)
         dimension = str(payload.get("dimension") or "").strip()
+        action = str(payload.get("action") or "").strip()
         return query_text(
             x=x,
             y=y,
@@ -944,6 +989,7 @@ class ARCAIHelperPlugin(Plugin):
             radius=radius,
             dimension=dimension,
             minutes=minutes,
+            action=action,
             heading=f"坐标 ({x:.1f},{y:.1f},{z:.1f}) 半径 {radius:.0f} 格近 {minutes} 分钟活动",
         )
 
@@ -1768,7 +1814,10 @@ class ARCAIHelperPlugin(Plugin):
                 "mc_economy / mc_land / mc_arc_tp（sub_action: query|change / list|info|at / home|warp|pos），"
                 "禁止用 mc_run_command 代替。"
                 "查询玩家在哪、近期做了什么、打了谁、被谁打、某个坐标附近发生过什么时，"
-                "必须调用 mc_skyeye_player / mc_skyeye_combat / mc_skyeye_location，禁止编造。"
+                "必须调用 mc_skyeye_player / mc_skyeye_combat / mc_skyeye_events / mc_skyeye_location，禁止编造。"
+                "玩家名支持模糊：名字不全或略有出入时仍用 mc_skyeye_player / combat，工具会匹配相关名。"
+                "问「最近谁死了 / 有没有PvP / 谁打怪」等不指定某人时，必须用 mc_skyeye_events："
+                "action=death|pvp|pve|combat|pvp_death 等，可不传 player_name；minutes 如 1440=24小时。"
                 "不要求该玩家当前在线。不知道在哪台服时 server 留空，中枢会搜索全部已连接服务器。"
                 "调用天眼时必须自己把用户说的时长换算成分钟写入 minutes，例如一天=1440、一小时=60。"
                 "银行：查自己余额用 mc_economy（sub_action=query）；"

@@ -19,6 +19,7 @@ TOOL_NAME_TO_ACTION: Dict[str, str] = {
     "mc_skyeye_player": "skyeye_player",
     "mc_skyeye_combat": "skyeye_combat",
     "mc_skyeye_location": "skyeye_location",
+    "mc_skyeye_events": "skyeye_events",
     "mc_stock_leaderboard": "stock_leaderboard",
     "mc_stock_quote": "stock_quote",
     "mc_player_ip": "player_ip",
@@ -244,22 +245,57 @@ def build_local_agent_tools(
                 _fn(
                     "mc_skyeye_player",
                     "天眼：查玩家位置与近期行为（管理员及以上）。不要求在线。"
-                    "minutes 由用户说法换算，一天=1440。",
+                    "player_name 支持模糊匹配（名字不全也对）。"
+                    "minutes 由用户说法换算，一天=1440。"
+                    "action 可选：death/pvp/break 等类别或 PlayerDeath 精确名。",
                     {
-                        "player_name": {"type": "string"},
+                        "player_name": {
+                            "type": "string",
+                            "description": "玩家名，支持模糊/子串；可略写",
+                        },
                         "minutes": {"type": "string"},
-                        "action": {"type": "string"},
+                        "action": {
+                            "type": "string",
+                            "description": "可选事件类型：death/pvp/pve/combat/break/place/join/quit/chat 等",
+                        },
                     },
                     ["player_name"],
                 ),
                 _fn(
                     "mc_skyeye_combat",
-                    "天眼：查玩家打架/被打/死亡（管理员及以上）。",
+                    "天眼：查打架/被打/死亡（管理员及以上）。"
+                    "player_name 可空=全服；支持模糊名。"
+                    "event_kind：combat(默认)/pvp/pve/death/pvp_death。",
                     {
-                        "player_name": {"type": "string"},
+                        "player_name": {
+                            "type": "string",
+                            "description": "可选。空则查全服该类型事件",
+                        },
+                        "minutes": {"type": "string"},
+                        "event_kind": {
+                            "type": "string",
+                            "description": "combat|pvp|pve|death|pvp_death|pvp_hit|pve_death",
+                        },
+                    },
+                ),
+                _fn(
+                    "mc_skyeye_events",
+                    "天眼：按事件类型查全服或某人（管理员及以上）。"
+                    "问「最近24小时谁死了」「有没有PvP」必须用本工具；可不传玩家名。"
+                    "action 必填：death/pvp/pve/combat/kill/join/quit/break/place/chat/command/teleport/economy/land/shop 等，"
+                    "也可 PlayerDeath 等精确名。player_name 可选且模糊。",
+                    {
+                        "action": {
+                            "type": "string",
+                            "description": "事件类型或别名，如 death、pvp、死亡、打怪",
+                        },
+                        "player_name": {
+                            "type": "string",
+                            "description": "可选模糊玩家名；空=全服该类型",
+                        },
                         "minutes": {"type": "string"},
                     },
-                    ["player_name"],
+                    ["action"],
                 ),
                 _fn(
                     "mc_skyeye_location",
@@ -271,6 +307,10 @@ def build_local_agent_tools(
                         "radius": {"type": "number"},
                         "dimension": {"type": "string"},
                         "minutes": {"type": "string"},
+                        "action": {
+                            "type": "string",
+                            "description": "可选事件类型过滤",
+                        },
                     },
                     ["x", "y", "z"],
                 ),
