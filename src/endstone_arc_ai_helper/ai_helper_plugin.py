@@ -26,6 +26,13 @@ from .ai_permission import (
 from .astrbot_hub_client import AstrBotHubChatClient
 from .chat_ai_manager import ChatAIManager
 from .devotion_store import DEFAULT_DEVOTION_CONFIG, DevotionStore, merge_devotion_config
+from .devotion_guards import (
+    clamp_player_blessing,
+    devotion_bypass_hint,
+    is_devotion_blessing_command,
+    remove_items_from_player,
+    validate_divine_favor_cost,
+)
 from .forbidden_items import forbidden_items_hint, is_forbidden_grant_item
 from .local_agent_tools import build_local_agent_tools, resolve_tool_action
 from .player_inventory import (
@@ -35,7 +42,6 @@ from .player_inventory import (
     format_inventory_report,
     item_display_name,
     normalize_item_id,
-    remove_item_count,
     summarize_inventory,
 )
 
@@ -616,6 +622,22 @@ class ARCAIHelperPlugin(Plugin):
             )
             return deny
 
+        if (
+            self._is_devotion_enabled()
+            and not self._devotion_admin_bypass(level)
+            and is_devotion_blessing_command(normalized)
+        ):
+            deny = devotion_bypass_hint()
+            self._sky_eye_log_agent_command(
+                command=normalized,
+                level=level,
+                status="denied",
+                requester_name=caller,
+                error=deny,
+                via="cmd",
+            )
+            return deny
+
         msg_ret: List[str] = []
         error_ret: List[str] = []
         language = getattr(self.server, "language", None)
@@ -896,9 +918,18 @@ class ARCAIHelperPlugin(Plugin):
                 "若你仍要收下，须先确认其诚意并设 allow_stingy=true。"
             )
 
-        removed = remove_item_count(player, item_id, amount)
-        if removed <= 0:
-            return "献祭失败：无法从背包扣除物品"
+        removed = remove_items_from_player(
+            player,
+            item_id,
+            amount,
+            server=self.server,
+            player_name=real_name,
+        )
+        if removed < amount:
+            return (
+                f"献祭失败：无法从背包扣除足够的 {item_display_name(item_id)}"
+                f"（需要 {amount}，仅扣除 {removed}）"
+            )
         xuid = self._player_xuid(player)
         record = self.devotion_store.get_record(xuid=xuid, name=real_name)
         long_term = int(record.get("long_term", 1) or 1)
@@ -995,6 +1026,34 @@ class ARCAIHelperPlugin(Plugin):
             item_amount = max(1, int(payload.get("item_amount", 1) or 1))
         except Exception:
             item_amount = 1
+        try:
+            duration_seconds = max(5, int(payload.get("duration_seconds", 120) or 120))
+        except Exception:
+            duration_seconds = 120
+        try:
+            amplifier = max(0, int(payload.get("amplifier", 0) or 0))
+        except Exception:
+            amplifier = 0
+
+        if not self._devotion_admin_bypass(level):
+            ok_cost, cost_msg, _minimum = validate_divine_favor_cost(
+                favor_cost=favor_cost,
+                blessing=blessing,
+                amplifier=amplifier,
+                duration_seconds=duration_seconds,
+                item_id=item_id,
+                item_amount=item_amount,
+                command=command,
+            )
+            if not ok_cost:
+                return cost_msg
+            if blessing:
+                amplifier, duration_seconds, cap_msg = clamp_player_blessing(
+                    amplifier=amplifier,
+                    duration_seconds=duration_seconds,
+                )
+                if cap_msg:
+                    return cap_msg
 
         actions = sum(
             [
@@ -1028,16 +1087,8 @@ class ARCAIHelperPlugin(Plugin):
         try:
             if blessing:
                 effect_name = self.devotion_store.resolve_blessing_effect(blessing)
-                try:
-                    duration = max(5, int(payload.get("duration_seconds", 120) or 120))
-                except Exception:
-                    duration = 120
-                try:
-                    amplifier = max(0, int(payload.get("amplifier", 0) or 0))
-                except Exception:
-                    amplifier = 0
-                command = f"effect {real_name} {effect_name} {duration} {amplifier} true"
-                detail = f"效果 {effect_name} {duration}s"
+                command = f"effect {real_name} {effect_name} {duration_seconds} {amplifier} true"
+                detail = f"效果 {effect_name} {duration_seconds}s L{amplifier + 1}"
             elif item_id:
                 if is_forbidden_grant_item(item_id):
                     if paid:
@@ -2153,8 +2204,14 @@ class ARCAIHelperPlugin(Plugin):
             "  若其身家豪富（钻石块、下界合金甲）却只献少量钻石/食物，视为吝啬无诚意 → 冷淡拒收，勿 accept",
             "· mc_accept_offering — 仅在诚意充足时收取；吝啬供奉会被工具拒收",
             "· mc_devotion_adjust — 祈祷后手动增减（short_delta / long_delta）",
-            "· mc_divine_intervention — 施行神术，必须自填 favor_cost 扣近期好感；可 effect / give / command(tp、雷霆等)",
+            "· mc_divine_intervention — 施行神术，必须自填 favor_cost 扣近期好感；"
+            "凡人效果 amplifier 最高 1（II 级），禁止 V 级；系统会校验最低消耗并拦截过低 favor_cost",
             "",
+            "【神恩节制 · 硬限制】",
+            "禁止随便给东西、禁止随手塞满级 buff。所有 give/effect/tp 必须走 mc_divine_intervention，"
+            "mc_run_command 的 give/effect/tp 在信仰模式下会被插件拦截。",
+            "效果等级：amplifier 0=I，1=II；超过 II 直接拒绝。",
+            "favor_cost 不得低于神术规模（低级效果约 8+，II 级约 23+，给钻石装备 25+）。",
             "【献祭诚意 · 必守】",
             "收祭前必须 mc_player_inventory 看清对方背包与身穿装备。身怀巨富却只拿几颗钻石、几个苹果糊弄，",
             "是试探神明而非虔诚。对此冷淡回应，不纳祭、不给信仰增益；可用「你的祭品配不上你的富足」「诚不足，神不纳」。",
@@ -2301,6 +2358,24 @@ class ARCAIHelperPlugin(Plugin):
                     status="denied",
                     requester_name=str(getattr(sender, "name", "") or ""),
                     error=reason or "拦截",
+                    via="execution_command",
+                )
+                continue
+
+            if (
+                self._is_devotion_enabled()
+                and not self._devotion_admin_bypass(level)
+                and is_devotion_blessing_command(normalized_command_line)
+            ):
+                reason = devotion_bypass_hint()
+                if sender is not None:
+                    sender.send_message(f"§c{assistant_tag} {reason}")
+                self._sky_eye_log_agent_command(
+                    command=normalized_command_line,
+                    level=level,
+                    status="denied",
+                    requester_name=str(getattr(sender, "name", "") or ""),
+                    error=reason,
                     via="execution_command",
                 )
                 continue

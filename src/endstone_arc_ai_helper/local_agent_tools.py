@@ -125,6 +125,7 @@ def build_devotion_agent_tools() -> List[Dict[str, Any]]:
             "mc_divine_intervention",
             "施行神术：必须指定 favor_cost（消耗近期好感）。"
             "近期不足则失败。可 effect / give / tp / 自定义 command（如雷霆）。"
+            "凡人效果 amplifier 最高 1（II 级），系统会拒绝过低 favor_cost。"
             "禁止给予基岩、屏障、命令方块等超模物品。",
             {
                 "favor_cost": {
@@ -136,7 +137,7 @@ def build_devotion_agent_tools() -> List[Dict[str, Any]]:
                     "description": "可选；药水效果名 strength/speed 等",
                 },
                 "duration_seconds": {"type": "integer", "description": "效果秒数"},
-                "amplifier": {"type": "integer", "description": "效果等级 0=I"},
+                "amplifier": {"type": "integer", "description": "效果等级 0=I，1=II；凡人禁止更高"},
                 "item_id": {"type": "string", "description": "可选；赐予物品"},
                 "item_amount": {"type": "integer", "description": "物品数量"},
                 "command": {

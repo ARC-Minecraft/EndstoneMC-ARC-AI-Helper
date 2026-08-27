@@ -130,6 +130,22 @@ def count_item(player: Any, item_id: str) -> int:
     return total
 
 
+def _reduced_stack(stack: Any, new_amount: int) -> Any:
+    """Build a fresh ItemStack when possible — some Endstone builds ignore in-place mutation."""
+    type_id = _item_type_id(stack)
+    if not type_id:
+        stack.amount = new_amount
+        return stack
+    try:
+        from endstone.inventory import ItemStack
+
+        data = int(getattr(stack, "data", 0) or 0)
+        return ItemStack(type_id, max(1, int(new_amount)), data)
+    except Exception:
+        stack.amount = new_amount
+        return stack
+
+
 def remove_item_count(player: Any, item_id: str, amount: int) -> int:
     inv = getattr(player, "inventory", None)
     if inv is None:
@@ -150,13 +166,17 @@ def remove_item_count(player: Any, item_id: str, amount: int) -> int:
         if not _ids_match(stored, item_id):
             continue
         have = int(getattr(stack, "amount", 0) or 0)
+        if have <= 0:
+            continue
         take = min(have, remaining)
         new_amount = have - take
-        if new_amount <= 0:
-            inv.set_item(idx, None)
-        else:
-            stack.amount = new_amount
-            inv.set_item(idx, stack)
+        try:
+            if new_amount <= 0:
+                inv.set_item(idx, None)
+            else:
+                inv.set_item(idx, _reduced_stack(stack, new_amount))
+        except Exception:
+            continue
         remaining -= take
         removed += take
     return removed
