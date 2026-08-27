@@ -23,6 +23,12 @@ TOOL_NAME_TO_ACTION: Dict[str, str] = {
     "mc_stock_leaderboard": "stock_leaderboard",
     "mc_stock_quote": "stock_quote",
     "mc_player_ip": "player_ip",
+    "mc_devotion_status": "devotion_status",
+    "mc_devotion_adjust": "devotion_adjust",
+    "mc_player_inventory": "player_inventory",
+    "mc_accept_offering": "accept_offering",
+    "mc_grant_blessing": "grant_blessing",
+    "mc_divine_intervention": "divine_intervention",
 }
 
 
@@ -43,11 +49,125 @@ def _fn(name: str, description: str, properties: Dict[str, Any], required: List[
     }
 
 
+def build_devotion_agent_tools() -> List[Dict[str, Any]]:
+    return [
+        _fn(
+            "mc_devotion_status",
+            "查询玩家长期好感、近期好感（上限=长期）、称号与献祭/祈祷次数。"
+            "任何神恩前先查状态。",
+            {
+                "player_name": {
+                    "type": "string",
+                    "description": "可选；默认当前对话玩家",
+                }
+            },
+        ),
+        _fn(
+            "mc_devotion_adjust",
+            "调整长期/近期好感。祈祷赞美献祭后由你判定增量："
+            "先补近期（不超过长期上限），长期单次最多+5且宜缓慢增长。"
+            "惩罚可扣近期或长期。赐福消耗请用 mc_divine_intervention，勿在此重复扣费。",
+            {
+                "short_delta": {
+                    "type": "integer",
+                    "description": "近期好感变化（可正可负）",
+                },
+                "long_delta": {
+                    "type": "integer",
+                    "description": "长期好感变化；祈祷/献祭时正增长单次≤5",
+                },
+                "reason": {"type": "string", "description": "原因"},
+                "kind": {
+                    "type": "string",
+                    "description": "prayer / flattery / offering / punishment / adjust",
+                },
+                "player_name": {"type": "string", "description": "可选"},
+            },
+        ),
+        _fn(
+            "mc_player_inventory",
+            "查看背包、身穿装备与身家侧写。献祭前必调；可传 offering_item_id + offering_amount 预判诚意。",
+            {
+                "player_name": {"type": "string", "description": "可选"},
+                "offering_item_id": {
+                    "type": "string",
+                    "description": "可选；拟献祭物品，用于诚意评估",
+                },
+                "offering_amount": {
+                    "type": "integer",
+                    "description": "可选；拟献祭数量",
+                },
+            },
+        ),
+        _fn(
+            "mc_accept_offering",
+            "收取献祭：扣背包物品。必须先查背包评估诚意；身怀巨富却献少量会被拒收。",
+            {
+                "item_id": {"type": "string", "description": "如 diamond"},
+                "amount": {"type": "integer", "description": "数量，默认 1"},
+                "short_gain": {
+                    "type": "integer",
+                    "description": "可选；给予近期好感",
+                },
+                "long_gain": {
+                    "type": "integer",
+                    "description": "可选；给予长期好感（≤5）",
+                },
+                "total_gain": {
+                    "type": "integer",
+                    "description": "可选；未拆分时按总量自动分配",
+                },
+                "player_name": {"type": "string", "description": "可选"},
+            },
+            ["item_id"],
+        ),
+        _fn(
+            "mc_divine_intervention",
+            "施行神术：必须指定 favor_cost（消耗近期好感）。"
+            "近期不足则失败。可 effect / give / tp / 自定义 command（如雷霆）。"
+            "禁止给予基岩、屏障、命令方块等超模物品。",
+            {
+                "favor_cost": {
+                    "type": "integer",
+                    "description": "消耗的近期好感，由你根据神术规模自定",
+                },
+                "blessing": {
+                    "type": "string",
+                    "description": "可选；药水效果名 strength/speed 等",
+                },
+                "duration_seconds": {"type": "integer", "description": "效果秒数"},
+                "amplifier": {"type": "integer", "description": "效果等级 0=I"},
+                "item_id": {"type": "string", "description": "可选；赐予物品"},
+                "item_amount": {"type": "integer", "description": "物品数量"},
+                "command": {
+                    "type": "string",
+                    "description": "可选；控制台指令（无斜杠），如雷霆、tp",
+                },
+                "player_name": {"type": "string", "description": "受益玩家，默认为自己"},
+            },
+            ["favor_cost"],
+        ),
+        _fn(
+            "mc_grant_blessing",
+            "（兼容）等同 mc_divine_intervention 仅施放 effect；须 favor_cost。",
+            {
+                "favor_cost": {"type": "integer"},
+                "blessing": {"type": "string"},
+                "duration_seconds": {"type": "integer"},
+                "amplifier": {"type": "integer"},
+                "player_name": {"type": "string"},
+            },
+            ["favor_cost", "blessing"],
+        ),
+    ]
+
+
 def build_local_agent_tools(
     *,
     has_prison: bool = False,
     has_arc_core: bool = False,
     has_stock: bool = False,
+    has_devotion: bool = False,
 ) -> List[Dict[str, Any]]:
     """Return OpenAI tools list for local Agent loop."""
     tools: List[Dict[str, Any]] = [
@@ -316,6 +436,8 @@ def build_local_agent_tools(
                 ),
             ]
         )
+    if has_devotion:
+        tools.extend(build_devotion_agent_tools())
     return tools
 
 

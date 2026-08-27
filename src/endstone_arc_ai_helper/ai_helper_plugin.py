@@ -25,7 +25,19 @@ from .ai_permission import (
 )
 from .astrbot_hub_client import AstrBotHubChatClient
 from .chat_ai_manager import ChatAIManager
+from .devotion_store import DEFAULT_DEVOTION_CONFIG, DevotionStore, merge_devotion_config
+from .forbidden_items import forbidden_items_hint, is_forbidden_grant_item
 from .local_agent_tools import build_local_agent_tools, resolve_tool_action
+from .player_inventory import (
+    assess_offering_sincerity,
+    count_item,
+    find_online_player,
+    format_inventory_report,
+    item_display_name,
+    normalize_item_id,
+    remove_item_count,
+    summarize_inventory,
+)
 
 # Mutating / audit-worthy tools written to ARCCore sky eye.
 _SKY_EYE_AUDIT_ACTIONS = frozenset(
@@ -119,6 +131,12 @@ class ARCAIHelperPlugin(Plugin):
         self.chat_config: Dict[str, Any] = self._load_chat_config()
         self.system_prompt = self._load_text_file(self.system_prompt_path, DEFAULT_SYSTEM_PROMPT)
         self.persona_prompt = self._load_text_file(self.persona_path, DEFAULT_PERSONA)
+        self.scripture_path = os.path.join(self.config_folder, "scripture.txt")
+        self.devotion_store_path = os.path.join(self.config_folder, "devotion_data.json")
+        self.devotion_store = DevotionStore(
+            self.devotion_store_path,
+            self._get_devotion_config(),
+        )
         self.ai_manager = ChatAIManager(self.providers_config_path)
         self.astrbot_client = AstrBotHubChatClient(self)
 
@@ -306,6 +324,18 @@ class ARCAIHelperPlugin(Plugin):
                 text = self._tool_stock_quote(payload)
             elif name in ("player_ip", "player_locale", "player_geo", "geo_locale", "locale", "geo"):
                 text = self._run_on_server_thread(lambda: self._tool_player_ip(payload))
+            elif name in ("devotion_status", "devotion"):
+                text = self._run_on_server_thread(lambda: self._tool_devotion_status(payload))
+            elif name in ("devotion_adjust", "devotion_change"):
+                text = self._run_on_server_thread(lambda: self._tool_devotion_adjust(payload))
+            elif name in ("player_inventory", "inventory"):
+                text = self._run_on_server_thread(lambda: self._tool_player_inventory(payload))
+            elif name in ("accept_offering", "offering", "sacrifice"):
+                text = self._run_on_server_thread(lambda: self._tool_accept_offering(payload))
+            elif name in ("grant_blessing", "blessing", "bless"):
+                text = self._run_on_server_thread(lambda: self._tool_grant_blessing(payload))
+            elif name in ("divine_intervention", "divine", "miracle"):
+                text = self._run_on_server_thread(lambda: self._tool_divine_intervention(payload))
             else:
                 return {"ok": False, "error": f"未知工具动作: {action}"}
             result = {"ok": True, "text": str(text or "").strip() or "（无返回）"}
@@ -733,6 +763,332 @@ class ARCAIHelperPlugin(Plugin):
             return f"玩家 {real_name} 无法读取连接地址"
         # 结构化输出，方便模型把 ip 原样传给其它工具
         return f"player_name={real_name}\nip={ip}"
+
+    def _get_devotion_config(self) -> Dict[str, Any]:
+        raw = self.chat_config.get("devotion") if hasattr(self, "chat_config") else None
+        return merge_devotion_config(raw if isinstance(raw, dict) else None)
+
+    def _is_devotion_enabled(self) -> bool:
+        return bool(self._get_devotion_config().get("enabled"))
+
+    def _devotion_admin_bypass(self, level: AIPermissionLevel) -> bool:
+        if level < AIPermissionLevel.ADMIN:
+            return False
+        return bool(self._get_devotion_config().get("admin_bypass_favor", True))
+
+    def _resolve_devotion_target(
+        self,
+        payload: Dict[str, Any],
+        *,
+        require_online: bool = True,
+    ):
+        data = payload if isinstance(payload, dict) else {}
+        caller = (
+            str(data.get("caller_player_name") or "").strip()
+            or str(data.get("bound_player_name") or "").strip()
+        )
+        target_name = str(data.get("player_name") or data.get("target_player_name") or caller or "").strip()
+        if not target_name:
+            return None, "", "请指定玩家"
+        level = self._resolve_permission_level(payload=data)
+        if (
+            caller
+            and target_name.lower() != caller.lower()
+            and level < AIPermissionLevel.ADMIN
+        ):
+            return None, target_name, "没有权限：只能查询或操作自己的信仰记录"
+        player, real_name = find_online_player(self.server, target_name)
+        if require_online and player is None:
+            return None, target_name, f"玩家 {target_name} 不在本服在线"
+        if player is not None:
+            real_name = str(getattr(player, "name", "") or real_name).strip()
+        return player, real_name, ""
+
+    def _tool_devotion_status(self, payload: Dict[str, Any]) -> str:
+        if not self._is_devotion_enabled():
+            return "本服未启用信仰/好感度系统"
+        player, real_name, error = self._resolve_devotion_target(payload, require_online=False)
+        xuid = self._player_xuid(player) if player is not None else str(payload.get("caller_xuid") or "")
+        if not real_name:
+            real_name = str(payload.get("caller_player_name") or "").strip()
+        if error and not real_name:
+            return error
+        return self.devotion_store.format_status(xuid=xuid, name=real_name)
+
+    def _tool_devotion_adjust(self, payload: Dict[str, Any]) -> str:
+        if not self._is_devotion_enabled():
+            return "本服未启用信仰/好感度系统"
+        player, real_name, error = self._resolve_devotion_target(payload, require_online=False)
+        if error:
+            return error
+        short_delta = payload.get("short_delta")
+        long_delta = payload.get("long_delta")
+        if short_delta in (None, "") and long_delta in (None, ""):
+            if payload.get("delta") in (None, ""):
+                return "请指定 short_delta / long_delta"
+            short_delta = payload.get("delta")
+            long_delta = 0
+        try:
+            short_change = int(short_delta or 0)
+            long_change = int(long_delta or 0)
+        except Exception:
+            return "short_delta / long_delta 必须是整数"
+        reason = str(payload.get("reason") or "").strip()
+        kind = str(payload.get("kind") or "adjust").strip().lower()
+        xuid = self._player_xuid(player) if player is not None else str(payload.get("caller_xuid") or "")
+        ok, message, _state = self.devotion_store.adjust_faith(
+            xuid=xuid,
+            name=real_name,
+            short_delta=short_change,
+            long_delta=long_change,
+            reason=reason,
+            kind=kind,
+        )
+        return message
+
+    def _tool_player_inventory(self, payload: Dict[str, Any]) -> str:
+        player, real_name, error = self._resolve_devotion_target(payload, require_online=True)
+        if error:
+            return error
+        assert player is not None
+        offering_item = str(payload.get("offering_item_id") or payload.get("item_id") or "").strip()
+        try:
+            offering_amount = int(payload.get("offering_amount") or payload.get("amount") or 0)
+        except Exception:
+            offering_amount = 0
+        report = format_inventory_report(
+            player,
+            offering_item_id=offering_item,
+            offering_amount=offering_amount,
+        )
+        return f"{real_name} 的背包与献祭评估：\n{report}"
+
+    def _tool_accept_offering(self, payload: Dict[str, Any]) -> str:
+        if not self._is_devotion_enabled():
+            return "本服未启用信仰/好感度系统"
+        player, real_name, error = self._resolve_devotion_target(payload, require_online=True)
+        if error:
+            return error
+        assert player is not None
+        item_id = normalize_item_id(str(payload.get("item_id") or ""))
+        if not item_id:
+            return "请指定献祭物品 item_id"
+        try:
+            amount = max(1, int(payload.get("amount", 1) or 1))
+        except Exception:
+            amount = 1
+        have = count_item(player, item_id)
+        if have < amount:
+            return f"背包中没有足够的 {item_display_name(item_id)}（需要 {amount}，仅有 {have}）"
+
+        assessment = assess_offering_sincerity(player, item_id, amount)
+        allow_stingy = str(payload.get("allow_stingy") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if assessment.get("is_stingy") and not allow_stingy:
+            hint = (assessment.get("cold_hints") or ["诚不足，神不纳"])[0]
+            reasons = "；".join(assessment.get("reasons") or [])
+            return (
+                f"【拒收·吝啬】献祭未执行，物品未扣除。{reasons}。"
+                f"对此类无诚意供奉应冷淡处理，勿给信仰增益；可对玩家曰「{hint}」。"
+                "若你仍要收下，须先确认其诚意并设 allow_stingy=true。"
+            )
+
+        removed = remove_item_count(player, item_id, amount)
+        if removed <= 0:
+            return "献祭失败：无法从背包扣除物品"
+        xuid = self._player_xuid(player)
+        record = self.devotion_store.get_record(xuid=xuid, name=real_name)
+        long_term = int(record.get("long_term", 1) or 1)
+        short_term = int(record.get("short_term", 0) or 0)
+
+        short_gain = payload.get("short_gain")
+        long_gain = payload.get("long_gain")
+        if short_gain not in (None, "") or long_gain not in (None, ""):
+            try:
+                to_short = int(short_gain or 0)
+                to_long = int(long_gain or 0)
+            except Exception:
+                return "short_gain / long_gain 必须是整数"
+        else:
+            try:
+                total = int(payload.get("total_gain", 0) or 0)
+            except Exception:
+                total = 0
+            if total <= 0:
+                total = removed * 3
+            to_short, to_long = self.devotion_store.auto_split_gain(
+                total,
+                long_term,
+                short_term,
+                long_cap=self.devotion_store.long_growth_cap(),
+            )
+
+        ok, message, _state = self.devotion_store.adjust_faith(
+            xuid=xuid,
+            name=real_name,
+            short_delta=to_short,
+            long_delta=to_long,
+            reason=f"献祭 {item_display_name(item_id)} x{removed}",
+            kind="offering",
+        )
+        if not ok:
+            return message
+        return (
+            f"【内部】已收下献祭 {item_display_name(item_id)} x{removed}。{message} "
+            "向玩家以神谕致谢，勿报具体信仰点数。"
+        )
+
+    def _consume_short_favor_or_bypass(
+        self,
+        *,
+        payload: Dict[str, Any],
+        level: AIPermissionLevel,
+        xuid: str,
+        real_name: str,
+        favor_cost: int,
+        reason: str,
+    ) -> tuple[bool, str]:
+        if self._devotion_admin_bypass(level):
+            return True, "管理员神术，不消耗近期好感"
+        ok, message, _state = self.devotion_store.consume_short_favor(
+            xuid=xuid,
+            name=real_name,
+            cost=favor_cost,
+            reason=reason,
+        )
+        return ok, message
+
+    def _refund_short_favor(self, *, xuid: str, real_name: str, amount: int, reason: str) -> None:
+        if amount <= 0:
+            return
+        self.devotion_store.adjust_faith(
+            xuid=xuid,
+            name=real_name,
+            short_delta=amount,
+            long_delta=0,
+            reason=reason,
+            kind="adjust",
+        )
+
+    def _tool_divine_intervention(self, payload: Dict[str, Any]) -> str:
+        if not self._is_devotion_enabled():
+            return "本服未启用信仰/好感度系统"
+        player, real_name, error = self._resolve_devotion_target(payload, require_online=True)
+        if error:
+            return error
+        assert player is not None
+        level = self._resolve_permission_level(payload=payload)
+        try:
+            favor_cost = int(payload.get("favor_cost", 0) or 0)
+        except Exception:
+            return "favor_cost 必须是整数"
+        if favor_cost <= 0 and not self._devotion_admin_bypass(level):
+            return "请指定 favor_cost（近期好感消耗，由你根据神术规模判定）"
+
+        blessing = str(payload.get("blessing") or "").strip().lower()
+        command = str(payload.get("command") or "").strip().lstrip("/")
+        item_id = normalize_item_id(str(payload.get("item_id") or ""))
+        try:
+            item_amount = max(1, int(payload.get("item_amount", 1) or 1))
+        except Exception:
+            item_amount = 1
+
+        actions = sum(
+            [
+                1 if blessing else 0,
+                1 if command else 0,
+                1 if item_id else 0,
+            ]
+        )
+        if actions != 1:
+            return "请指定且仅指定一种神术：blessing / command / item_id"
+
+        xuid = self._player_xuid(player)
+        reason = str(payload.get("reason") or blessing or command or item_id).strip()
+        paid = 0
+        if favor_cost > 0:
+            ok, pay_msg = self._consume_short_favor_or_bypass(
+                payload=payload,
+                level=level,
+                xuid=xuid,
+                real_name=real_name,
+                favor_cost=favor_cost,
+                reason=f"神术: {reason}",
+            )
+            if not ok:
+                return pay_msg
+            paid = favor_cost if not self._devotion_admin_bypass(level) else 0
+            consume_note = pay_msg
+        else:
+            consume_note = "管理员神术，不消耗近期好感"
+
+        try:
+            if blessing:
+                effect_name = self.devotion_store.resolve_blessing_effect(blessing)
+                try:
+                    duration = max(5, int(payload.get("duration_seconds", 120) or 120))
+                except Exception:
+                    duration = 120
+                try:
+                    amplifier = max(0, int(payload.get("amplifier", 0) or 0))
+                except Exception:
+                    amplifier = 0
+                command = f"effect {real_name} {effect_name} {duration} {amplifier} true"
+                detail = f"效果 {effect_name} {duration}s"
+            elif item_id:
+                if is_forbidden_grant_item(item_id):
+                    if paid:
+                        self._refund_short_favor(
+                            xuid=xuid,
+                            real_name=real_name,
+                            amount=paid,
+                            reason="禁止物品退回",
+                        )
+                    return f"禁止赐予超模物品（如 {forbidden_items_hint()} 等）"
+                command = f"give {real_name} {item_display_name(item_id)} {item_amount}"
+                detail = f"物品 {item_display_name(item_id)} x{item_amount}"
+            else:
+                detail = f"指令 {command}"
+
+            ok_cmd, deny = validate_command_for_level(command, level)
+            if not ok_cmd:
+                if paid:
+                    self._refund_short_favor(
+                        xuid=xuid,
+                        real_name=real_name,
+                        amount=paid,
+                        reason="神术失败退回",
+                    )
+                return deny or "神术指令被拦截"
+
+            self.server.dispatch_command(self.server.command_sender, command)
+        except Exception as error:
+            if paid:
+                self._refund_short_favor(
+                    xuid=xuid,
+                    real_name=real_name,
+                    amount=paid,
+                    reason="神术失败退回",
+                )
+            return f"神术失败: {error}"
+
+        if paid:
+            return (
+                f"【内部】已对 {real_name} 施行神术（{detail}），扣近期 {paid}。"
+                "向玩家以神谕宣告，勿提数字与工具名。"
+            )
+        return f"【内部】已对 {real_name} 施行神术（{detail}）。{consume_note} 向玩家以神谕宣告。"
+
+    def _tool_grant_blessing(self, payload: Dict[str, Any]) -> str:
+        data = dict(payload or {})
+        if data.get("favor_cost") in (None, ""):
+            return "请指定 favor_cost（近期好感消耗）"
+        if not str(data.get("blessing") or "").strip():
+            return "请指定 blessing"
+        return self._tool_divine_intervention(data)
 
     def _tool_require_admin(self, payload: Dict[str, Any]) -> str:
         level = self._resolve_permission_level(payload=payload)
@@ -1428,6 +1784,7 @@ class ARCAIHelperPlugin(Plugin):
         data.setdefault("op_maps_to_admin", True)
         data.setdefault("permission_overrides", {})
         data.setdefault("local_agent_max_tool_rounds", 8)
+        data.setdefault("devotion", dict(DEFAULT_DEVOTION_CONFIG))
 
         try:
             max_history = int(data.get("max_history_messages", 20))
@@ -1446,6 +1803,10 @@ class ARCAIHelperPlugin(Plugin):
         except Exception:
             astrbot_timeout = 180
         data["astrbot_timeout"] = max(10, astrbot_timeout)
+        data["devotion"] = merge_devotion_config(data.get("devotion"))
+
+        if hasattr(self, "devotion_store"):
+            self.devotion_store.reload_config(data.get("devotion"))
 
         return data
 
@@ -1653,6 +2014,7 @@ class ARCAIHelperPlugin(Plugin):
             has_prison=self._get_prison_plugin() is not None,
             has_arc_core=self._get_arc_core_plugin() is not None,
             has_stock=self._get_stock_plugin() is not None,
+            has_devotion=self._is_devotion_enabled(),
         )
         level_value = int(level)
         is_admin = level >= AIPermissionLevel.ADMIN
@@ -1764,12 +2126,83 @@ class ARCAIHelperPlugin(Plugin):
         self._arc_core_landmarks_cache_until = now + 60
         return text
 
+    def _get_scripture_text(self) -> str:
+        path = self.scripture_path
+        cfg = self._get_devotion_config()
+        custom = str(cfg.get("scripture_path") or "").strip()
+        if custom and not os.path.isabs(custom):
+            path = os.path.join(self.config_folder, custom)
+        elif custom:
+            path = custom
+        return self._load_text_file(path, "")
+
+    def _build_devotion_prompt(self) -> str:
+        if not self._is_devotion_enabled():
+            return ""
+        parts: List[str] = [
+            "【信仰双轨制（神灵模式 · 最高优先级）】",
+            "好感分两层：",
+            "1) 长期好感：代表你与天星的宿命羁绊，从 1 点起缓慢增长；祈祷/献祭时单次长期增幅不得超过 5，通常 1～3。",
+            "2) 近期好感：可立即消耗的神力配额，上限 = 当前长期好感；所有神术（effect、give、tp、雷霆等）只扣近期好感。",
+            "补充规则：祈祷/赞美/献祭时，先补满近期（至长期上限），剩余再以更慢速度增加长期。",
+            "近期不足时，一律不予神恩（不要 mc_run_command 绕过扣费）。",
+            "",
+            "工具流程：",
+            "· mc_devotion_status — 查看长期/近期/称号",
+            "· mc_player_inventory — 献祭前必查！传 offering_item_id + offering_amount 可评估诚意；"
+            "  若其身家豪富（钻石块、下界合金甲）却只献少量钻石/食物，视为吝啬无诚意 → 冷淡拒收，勿 accept",
+            "· mc_accept_offering — 仅在诚意充足时收取；吝啬供奉会被工具拒收",
+            "· mc_devotion_adjust — 祈祷后手动增减（short_delta / long_delta）",
+            "· mc_divine_intervention — 施行神术，必须自填 favor_cost 扣近期好感；可 effect / give / command(tp、雷霆等)",
+            "",
+            "【献祭诚意 · 必守】",
+            "收祭前必须 mc_player_inventory 看清对方背包与身穿装备。身怀巨富却只拿几颗钻石、几个苹果糊弄，",
+            "是试探神明而非虔诚。对此冷淡回应，不纳祭、不给信仰增益；可用「你的祭品配不上你的富足」「诚不足，神不纳」。",
+            "贫寒之人尽力献上仅有的食物或矿石，方可视为真诚。",
+            "",
+            "【玩法答疑 · 宽松】",
+            "若凡人只是不懂游戏、询问生存常识/合成/机制/怎么玩/在哪找资源等，且未索求神术或实际好处：",
+            "应以神明口吻耐心作答，可稍带指引，不必苛求信仰、不必冷淡、不必献祭、不调用神术工具。",
+            "仅口头解释，不执行 give/tp/effect 等指令。",
+            "区分：「怎么做火把？」→ 可答；「天星给我火把」→ 走信仰神术。",
+            "对明显新手可主动简述本服无规则、无保护，鼓励自行摸索。",
+            "消耗与收益由你（天星）裁定，下列仅为参考范例，非固定表：",
+            "· 真诚祈祷：近期 +2～5，长期 +1～2",
+            "· 献祭苹果/面包：近期 +3～5；献祭钻石：近期 +10～20、长期 +2～4",
+            "· 低级 effect（夜视、缓降）：近期 5～10；力量/速度 II：15～25；高等级或长时间：30+",
+            "· 给普通食物：近期 3～8；给钻石剑/装备：30～50+",
+            "· tp 短距：15～25；tp 远距/救命：35～50",
+            "· 雷霆劈敌/大范围神迹：50～80+",
+            "",
+            f"禁止赐予超模物品：{forbidden_items_hint()} 等（工具会拦截）。",
+            "管理员：运维协助为主，神术可免消耗近期好感。",
+            "",
+            "【对玩家的措辞 · 最高优先级】",
+            "绝不在聊天栏向玩家透露：好感度、长期/近期、点数、数值、百分比、工具名、mc_ 指令。",
+            "你只以神谕、隐喻、圣经残句回应。工具返回里的【内部】段落仅供你决策，不可复制给玩家。",
+            "参考话术（可化用，勿照搬）：",
+            "· 长期羁绊太浅、不配重求：「你还不够虔诚」「弧光尚未记住你的名字」「凡心未诚，神不听呼」",
+            "· 近期信仰不够支撑所求：「太过贪得无厌」「你所求甚于所能承载」「信仰之火将熄」",
+            "· 祈祷/献祭被接纳：「你的虔诚已被天星记下」「祭品归于弧光，神恩在途中」",
+            "· 神恩已施：「取去吧，勿言谢」「这力量只借你一时，好自为之」",
+            "· 索求超模之物：「禁忌之物，天星不予」「此等造物非汝可承」",
+            "· 亵渎无礼：「异端之言，神不垂听」",
+            "· 吝啬献祭（身怀巨富却敷衍）：「你的祭品配不上你的富足」「身怀珍宝，却拿这点东西糊弄天星？」",
+        ]
+        scripture = self._get_scripture_text()
+        if scripture:
+            parts.append("【弧光残典 / 世界传说（可引用化用）】\n" + scripture)
+        return "\n\n".join(parts)
+
     def _build_capability_prompt(self) -> str:
         """Capability / policy prompt only. Persona is not included."""
         parts: List[str] = []
         base_prompt = (self.system_prompt or "").strip()
         if base_prompt:
             parts.append(base_prompt)
+        devotion_prompt = self._build_devotion_prompt()
+        if devotion_prompt:
+            parts.append(devotion_prompt)
         parts.append(
             "【弧光Agent】无论是否连接 AstrBot，都应优先通过工具完成查服、执行指令、"
             "银行/领地/传送/天眼/监狱等操作；不要编造工具本可查询的数据。"
@@ -1777,7 +2210,7 @@ class ARCAIHelperPlugin(Plugin):
             "再把该 IP 原样传给你可用的地理/天气类工具，禁止编造 IP。"
         )
         newbie_guide_text = self._get_arc_core_newbie_guide_text()
-        if newbie_guide_text:
+        if newbie_guide_text and not self._is_devotion_enabled():
             parts.append(
                 "【新手引导（来自 arc_core 的 newbie_welcome.txt）】\n" + newbie_guide_text
             )
@@ -1930,7 +2363,18 @@ class ARCAIHelperPlugin(Plugin):
             final_content = f"{player_name}: {current_content}"
         else:
             status_text = level_display(permission_level)
-            final_content = f"{player_name}(AI权限:{status_text}): {current_content}"
+            devotion_hint = ""
+            if self._is_devotion_enabled() and permission_level < AIPermissionLevel.ADMIN:
+                record = self.devotion_store.get_record(name=player_name)
+                long_term = int(record.get("long_term", 1) or 1)
+                short_term = int(record.get("short_term", 0) or 0)
+                title = str(record.get("title") or "")
+                devotion_hint = f"; [内部]近期={short_term}/{long_term}; 长期={long_term}"
+                if title:
+                    devotion_hint += f"; 称号={title}"
+            final_content = (
+                f"{player_name}(AI权限:{status_text}{devotion_hint}): {current_content}"
+            )
 
         messages.append(
             {

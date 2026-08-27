@@ -1,9 +1,9 @@
 ## EndStone ARC AI Helper（弧光 Agent）
-[![Version](https://img.shields.io/badge/version-v2.1.10-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
+[![Version](https://img.shields.io/badge/version-v2.3.3-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 
-一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.1.10**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
+一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.3.3**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
 
 支持：
 
@@ -136,9 +136,20 @@
   "default_permission_level": "admin",
   "op_maps_to_admin": true,
   "permission_overrides": {},
-  "local_agent_max_tool_rounds": 8
+  "local_agent_max_tool_rounds": 8,
+  "devotion": {
+    "enabled": false,
+    "mode": "deity",
+    "max_long_term": 100,
+    "default_long_term": 1,
+    "long_growth_cap": 5,
+    "admin_bypass_favor": true,
+    "scripture_path": "scripture.txt"
+  }
 }
 ```
+
+- **devotion**（v2.2.0+，可选）：神灵模式 / 双轨信仰（长期+近期好感）。默认 `enabled: false`；仅在有需要的服（如无规则生存）在 `chat_config.json` 开启，并自备 `persona.txt` / `system_prompt.txt` / `scripture.txt`。其他服无需改动 prompt。
 
 - **prefix_triggers** / **contain_triggers**：公屏触发词。
 - **max_history_messages**：公屏对话历史条数上限（本机 Agent 上下文）。
@@ -185,6 +196,8 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 
 ### 更新日志
 
+- **2.3.3**：神灵模式补充「玩法答疑宽松、神恩严格」；献祭前评估背包诚意，富家吝啬供奉可拒收；对玩家不暴露好感数值，用神谕隐喻。
+- **2.3.0～2.3.2**：神灵模式（`devotion.enabled`）：双轨信仰、献祭/神术工具 `mc_devotion_*` / `mc_divine_intervention`、背包操控与禁止超模物品。
 - **2.1.10**：天眼支持模糊玩家名；新增 `mc_skyeye_events`（按事件类型查全服，如最近谁死了）；`mc_skyeye_combat` 玩家名可空并支持 `event_kind`（pvp/pve/death 等）。需弧光核心 ≥ 0.9.28。
 - **2.1.9**：新增只读工具 `mc_player_ip`，返回在线玩家连接原始 IP（`ip=`），供模型传给下游地理/天气工具。需中枢 ≥ 1.7.9。
 - **2.1.8**：天星执行的游戏指令写入天眼 `AgentCommand`，挂在请求者玩家名下（查该玩家可见）；不再把每条聊天回复刷进天眼。需弧光核心 ≥ 0.8.16。
