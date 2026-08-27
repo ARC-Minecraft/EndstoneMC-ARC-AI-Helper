@@ -940,7 +940,7 @@ class ARCAIHelperPlugin(Plugin):
             return "本服未安装弧光核心 arc_core"
         query_text = getattr(core, "api_sky_eye_query_text", None)
         if not callable(query_text):
-            return "弧光核心版本过旧，没有天眼查询接口（需 ≥0.9.27）"
+            return "弧光核心版本过旧，没有天眼查询接口（需 ≥0.9.28）"
         action = str(payload.get("action") or payload.get("event_kind") or "").strip()
         if not action:
             return (
