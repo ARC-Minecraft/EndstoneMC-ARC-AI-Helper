@@ -622,11 +622,8 @@ class ARCAIHelperPlugin(Plugin):
             )
             return deny
 
-        if (
-            self._is_devotion_enabled()
-            and not self._devotion_admin_bypass(level)
-            and is_devotion_blessing_command(normalized)
-        ):
+        # 信仰模式：凡人与管理员都不得用 mc_run_command 直接 give/effect/tp 绕过神术通道。
+        if self._is_devotion_enabled() and is_devotion_blessing_command(normalized):
             deny = devotion_bypass_hint()
             self._sky_eye_log_agent_command(
                 command=normalized,
@@ -1035,6 +1032,15 @@ class ARCAIHelperPlugin(Plugin):
         except Exception:
             amplifier = 0
 
+        # 效果等级硬上限对所有人生效（含管理员），避免草率塞满级 buff。
+        if blessing:
+            amplifier, duration_seconds, cap_msg = clamp_player_blessing(
+                amplifier=amplifier,
+                duration_seconds=duration_seconds,
+            )
+            if cap_msg:
+                return cap_msg
+
         if not self._devotion_admin_bypass(level):
             ok_cost, cost_msg, _minimum = validate_divine_favor_cost(
                 favor_cost=favor_cost,
@@ -1047,13 +1053,6 @@ class ARCAIHelperPlugin(Plugin):
             )
             if not ok_cost:
                 return cost_msg
-            if blessing:
-                amplifier, duration_seconds, cap_msg = clamp_player_blessing(
-                    amplifier=amplifier,
-                    duration_seconds=duration_seconds,
-                )
-                if cap_msg:
-                    return cap_msg
 
         actions = sum(
             [
@@ -2232,7 +2231,8 @@ class ARCAIHelperPlugin(Plugin):
             "· 雷霆劈敌/大范围神迹：50～80+",
             "",
             f"禁止赐予超模物品：{forbidden_items_hint()} 等（工具会拦截）。",
-            "管理员：运维协助为主，神术可免消耗近期好感。",
+            "管理员：运维协助为主，神术可免消耗近期好感；仍须走 mc_divine_intervention，"
+            "且凡人效果等级上限（II）同样生效，禁止用 mc_run_command 白嫖 give/effect。",
             "",
             "【对玩家的措辞 · 最高优先级】",
             "绝不在聊天栏向玩家透露：好感度、长期/近期、点数、数值、百分比、工具名、mc_ 指令。",
@@ -2362,11 +2362,7 @@ class ARCAIHelperPlugin(Plugin):
                 )
                 continue
 
-            if (
-                self._is_devotion_enabled()
-                and not self._devotion_admin_bypass(level)
-                and is_devotion_blessing_command(normalized_command_line)
-            ):
+            if self._is_devotion_enabled() and is_devotion_blessing_command(normalized_command_line):
                 reason = devotion_bypass_hint()
                 if sender is not None:
                     sender.send_message(f"§c{assistant_tag} {reason}")
