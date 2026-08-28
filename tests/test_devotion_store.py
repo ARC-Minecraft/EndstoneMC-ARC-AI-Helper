@@ -7,8 +7,43 @@ from endstone_arc_ai_helper.devotion_store import DevotionStore, merge_devotion_
 def test_merge_devotion_config_defaults():
     cfg = merge_devotion_config(None)
     assert cfg["enabled"] is False
-    assert cfg["max_long_term"] == 100
+    assert cfg["max_long_term"] == 0
     assert cfg["default_long_term"] == 1
+    assert cfg["titles"][2]["min"] == 100
+
+
+def test_uncapped_long_term_and_titles():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "devotion.json")
+        store = DevotionStore(
+            path,
+            {
+                "enabled": True,
+                "max_long_term": 0,
+                "long_growth_cap": 3,
+                "titles": [
+                    {"min": 0, "title": "陌生者"},
+                    {"min": 10, "title": "初见信徒"},
+                    {"min": 100, "title": "虔信者"},
+                    {"min": 1000, "title": "神选之仆"},
+                    {"min": 10000, "title": "圣眷牧者"},
+                ],
+            },
+        )
+        assert store.is_long_term_uncapped() is True
+        assert os.path.exists(path)
+        assert store.title_for_long_term(1) == "陌生者"
+        assert store.title_for_long_term(10) == "初见信徒"
+        assert store.title_for_long_term(100) == "虔信者"
+        assert store.title_for_long_term(1000) == "神选之仆"
+        assert store.title_for_long_term(10000) == "圣眷牧者"
+
+        ok, _msg, state = store.adjust_faith(
+            name="Steve", short_delta=0, long_delta=50, kind="prayer"
+        )
+        assert ok is True
+        assert state["long_term"] == 4  # 1 + growth_cap 3
+
 
 
 def test_dual_favor_prayer_and_consume():

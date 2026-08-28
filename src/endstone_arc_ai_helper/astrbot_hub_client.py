@@ -254,7 +254,18 @@ class AstrBotHubChatClient:
         """
         request_id = data.get("request_id")
         action = str(data.get("action") or "")
-        args = data.get("args") if isinstance(data.get("args"), dict) else {}
+        raw_args = data.get("args") if isinstance(data.get("args"), dict) else {}
+        args = dict(raw_args)
+        # Hub 侧认证的玩家名优先；禁止模型在 args 里伪造 caller / 权限。
+        hub_player = (
+            str(data.get("player_name") or "").strip()
+            or str(data.get("caller_player_name") or "").strip()
+            or str(args.get("caller_player_name") or "").strip()
+        )
+        if hub_player:
+            args["caller_player_name"] = hub_player
+        args.pop("permission_level", None)
+        args.pop("is_op", None)
         loop = asyncio.get_running_loop()
         try:
             result = await loop.run_in_executor(

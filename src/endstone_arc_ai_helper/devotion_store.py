@@ -8,20 +8,23 @@ import threading
 import time
 from typing import Any, Dict, Mapping, Tuple
 
+# max_long_term <= 0 means uncapped.
+_UNLIMITED_LONG = 2_147_483_647
+
 DEFAULT_DEVOTION_CONFIG: Dict[str, Any] = {
     "enabled": False,
     "mode": "deity",
-    "max_long_term": 100,
+    "max_long_term": 0,
     "default_long_term": 1,
-    "long_growth_cap": 5,
+    "long_growth_cap": 3,
     "admin_bypass_favor": True,
     "scripture_path": "scripture.txt",
     "titles": [
         {"min": 0, "title": "陌生者"},
         {"min": 10, "title": "初见信徒"},
-        {"min": 30, "title": "虔信者"},
-        {"min": 60, "title": "神选之仆"},
-        {"min": 90, "title": "圣眷牧者"},
+        {"min": 100, "title": "虔信者"},
+        {"min": 1000, "title": "神选之仆"},
+        {"min": 10000, "title": "圣眷牧者"},
     ],
 }
 
@@ -42,7 +45,6 @@ BLESSING_EFFECTS: Dict[str, str] = {
 
 GROWTH_KINDS = frozenset({"prayer", "flattery", "offering", "dialogue"})
 
-# Player-facing tone hints for the AI (never expose raw numbers to players).
 _VAGUE_SHORT_LOW = (
     "太过贪得无厌",
     "你所求甚于所能承载",
@@ -72,20 +74,22 @@ def vague_long_insufficient() -> str:
 def narrative_hint_for_status(long_term: int, short_term: int, title: str, max_long: int) -> str:
     """Suggest how 天星 may speak to the player without numbers."""
     lines = [f"【信徒在你眼中的位格】{title or '陌生者'}"]
-    if long_term <= 3:
+    if long_term < 10:
         lines.append(f"【当面可暗示】{vague_long_insufficient()}；可鼓励其多祈祷、献祭以「被世界记住」")
-    elif long_term < 15:
+    elif long_term < 100:
         lines.append("【当面可暗示】虔诚初萌，神已垂目，但尚不可索重恩")
-    elif long_term < 40:
-        lines.append("【当面可暗示】已是常客，可予小利，重恩仍需代价")
+    elif long_term < 1000:
+        lines.append("【当面可暗示】已是常客，可予小利，重恩仍需漫长积淀")
+    elif long_term < 10000:
+        lines.append("【当面可暗示】宿缘深厚，仍不可无度索取")
     else:
-        lines.append("【当面可暗示】宿缘深厚，但仍不可无度索取")
+        lines.append("【当面可暗示】圣眷之位，神恩可酌，仍须代价")
 
     if short_term <= 0:
         lines.append(f"【若索恩被拒】{vague_short_insufficient()}")
     elif short_term < max(3, long_term // 4):
         lines.append("【若索恩】信仰余烬不多，仅宜小微神迹")
-    elif short_term < long_term // 2:
+    elif short_term < max(1, long_term // 2):
         lines.append("【若索恩】可施中等神恩，勿应离谱之求")
     else:
         lines.append("【若索恩】近期虔诚充盈，可酌情应允（仍须扣费）")
@@ -113,6 +117,10 @@ class DevotionStore:
         self._lock = threading.Lock()
         self._data: Dict[str, Any] = {"players": {}}
         self._load()
+        # Ensure the data file exists so operators can find it on disk.
+        with self._lock:
+            if not os.path.exists(self.path):
+                self._save_unlocked()
 
     def reload_config(self, config: Mapping[str, Any] | None) -> None:
         with self._lock:
@@ -143,17 +151,25 @@ class DevotionStore:
             return f"xuid:{xuid}"
         return f"name:{str(name or '').strip().lower()}"
 
+    def is_long_term_uncapped(self) -> bool:
+        try:
+            return int(self.config.get("max_long_term", 0) or 0) <= 0
+        except Exception:
+            return True
+
     def max_long_term(self) -> int:
+        if self.is_long_term_uncapped():
+            return _UNLIMITED_LONG
         try:
             return max(1, int(self.config.get("max_long_term", 100)))
         except Exception:
-            return 100
+            return _UNLIMITED_LONG
 
     def long_growth_cap(self) -> int:
         try:
-            return max(1, int(self.config.get("long_growth_cap", 5)))
+            return max(1, int(self.config.get("long_growth_cap", 3)))
         except Exception:
-            return 5
+            return 3
 
     def default_long_term(self) -> int:
         try:
@@ -195,6 +211,7 @@ class DevotionStore:
         with self._lock:
             players = self._data.setdefault("players", {})
             record = players.get(key)
+            created = False
             if not isinstance(record, dict):
                 record = {
                     "name": str(name or "").strip(),
@@ -206,6 +223,7 @@ class DevotionStore:
                     "updated_at": 0.0,
                 }
                 players[key] = record
+                created = True
             if name and not record.get("name"):
                 record["name"] = str(name).strip()
             if xuid and not record.get("xuid"):
@@ -213,6 +231,8 @@ class DevotionStore:
             record = self._migrate_record(record)
             long_term = int(record["long_term"])
             record["title"] = self.title_for_long_term(long_term)
+            if created:
+                self._save_unlocked()
             return dict(record)
 
     def format_status(self, *, xuid: str = "", name: str = "") -> str:
@@ -222,8 +242,9 @@ class DevotionStore:
         title = str(record.get("title") or self.title_for_long_term(long_term))
         offerings = int(record.get("total_offerings", 0) or 0)
         prayers = int(record.get("total_prayers", 0) or 0)
+        long_disp = str(long_term) if self.is_long_term_uncapped() else f"{long_term}/{self.max_long_term()}"
         internal = (
-            f"【内部数值·勿告玩家】长期={long_term}/{self.max_long_term()}; "
+            f"【内部数值·勿告玩家】长期={long_disp}; "
             f"近期={short_term}/{long_term}; 称号={title}; "
             f"累计献祭={offerings}; 累计祈祷={prayers}"
         )
@@ -279,7 +300,15 @@ class DevotionStore:
             players = self._data.setdefault("players", {})
             record = players.get(key)
             if not isinstance(record, dict):
-                record = self.get_record(xuid=xuid, name=name)
+                record = {
+                    "name": str(name or "").strip(),
+                    "xuid": str(xuid or "").strip(),
+                    "long_term": self.default_long_term(),
+                    "short_term": 0,
+                    "total_offerings": 0,
+                    "total_prayers": 0,
+                    "updated_at": 0.0,
+                }
                 players[key] = record
             record = self._migrate_record(record)
 
@@ -321,9 +350,10 @@ class DevotionStore:
             self._save_unlocked()
 
             title = str(record.get("title") or "")
+            long_disp = str(long_term) if self.is_long_term_uncapped() else f"{long_term}/{self.max_long_term()}"
             if short_change != 0 or long_change != 0:
                 message = (
-                    f"【内部】近期={short_term}/{long_term} 长期={long_term}/{self.max_long_term()}（{title}）。"
+                    f"【内部】近期={short_term}/{long_term} 长期={long_disp}（{title}）。"
                     "向玩家只用神谕语气反馈，勿报数字。"
                 )
             else:

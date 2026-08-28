@@ -254,14 +254,35 @@ class ARCAIHelperPlugin(Plugin):
         player=None,
         payload: Dict[str, Any] | None = None,
     ) -> AIPermissionLevel:
-        """Resolve AI permission level from player, config, and Hub payload."""
+        """Resolve AI permission from the real online caller — never trust tool-arg claims."""
         data = payload if isinstance(payload, dict) else {}
         op_maps = bool(self.chat_config.get("op_maps_to_admin", True))
+
+        live_player = player
+        if live_player is None:
+            caller = (
+                str(data.get("caller_player_name") or "").strip()
+                or str(data.get("bound_player_name") or "").strip()
+            )
+            if caller:
+                found, _ = find_online_player(self.server, caller)
+                live_player = found
+
+        # Have a live player → identity from OP/权限节点 only.
+        # No live player → refuse elevation (default assistant); ignore forged admin in args.
+        if live_player is not None:
+            return resolve_permission_level(
+                player=live_player,
+                chat_config=self.chat_config,
+                payload_level=None,
+                payload_is_op=False,
+                op_maps_to_admin=op_maps,
+            )
         return resolve_permission_level(
-            player=player,
+            player=None,
             chat_config=self.chat_config,
-            payload_level=data.get("permission_level"),
-            payload_is_op=bool(data.get("is_op", False)),
+            payload_level=None,
+            payload_is_op=False,
             op_maps_to_admin=op_maps,
         )
 
@@ -277,6 +298,11 @@ class ARCAIHelperPlugin(Plugin):
             JSON-serializable dict with ``ok`` and ``text`` or ``error``.
         """
         payload = args if isinstance(args, dict) else {}
+        # Hub/模型可能伪造 permission_level；一律剔除，改由 _resolve_permission_level 按真人解析。
+        if isinstance(payload, dict):
+            payload = dict(payload)
+            payload.pop("permission_level", None)
+            payload.pop("is_op", None)
         name = str(action or "").strip().lower()
         if name.startswith("mc_"):
             name = resolve_tool_action(name)
@@ -2065,11 +2091,12 @@ class ARCAIHelperPlugin(Plugin):
 
         def _execute_local_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
             args = dict(tool_args or {})
-            args.setdefault("is_op", is_admin)
-            args.setdefault("permission_level", level_value)
+            # 强制覆盖：模型不得在参数里自报 admin / is_op 来绕过信仰扣费。
+            args["is_op"] = is_admin
+            args["permission_level"] = level_value
             if player is not None:
-                args.setdefault("caller_player_name", str(getattr(player, "name", "") or ""))
-                args.setdefault("caller_xuid", self._player_xuid(player))
+                args["caller_player_name"] = str(getattr(player, "name", "") or "")
+                args["caller_xuid"] = self._player_xuid(player)
             result = self.run_ai_tool(tool_name, args)
             if result.get("ok"):
                 return str(result.get("text") or "（无返回）")
@@ -2186,10 +2213,13 @@ class ARCAIHelperPlugin(Plugin):
         parts: List[str] = [
             "【信仰双轨制（神灵模式 · 最高优先级）】",
             "好感分两层：",
-            "1) 长期好感：代表你与天星的宿命羁绊，从 1 点起缓慢增长；祈祷/献祭时单次长期增幅不得超过 5，通常 1～3。",
+            "1) 长期好感：代表你与天星的宿命羁绊，从 1 点起极缓慢增长，无上限；"
+            "祈祷/献祭时单次长期增幅不得超过 long_growth_cap（通常 1～3）。"
+            "称号门槛：10 初见信徒 → 100 虔信者 → 1000 神选之仆 → 10000 圣眷牧者（漫长过程）。",
             "2) 近期好感：可立即消耗的神力配额，上限 = 当前长期好感；所有神术（effect、give、tp、雷霆等）只扣近期好感。",
             "补充规则：祈祷/赞美/献祭时，先补满近期（至长期上限），剩余再以更慢速度增加长期。",
             "近期不足时，一律不予神恩（不要 mc_run_command 绕过扣费）。",
+            "普通玩家（非 OP）绝无白嫖：短期不够就拒，用「贪得无厌」「不够虔诚」等话术，禁止给东西。",
             "",
             "工具流程：",
             "· mc_devotion_status — 查看长期/近期/称号",
