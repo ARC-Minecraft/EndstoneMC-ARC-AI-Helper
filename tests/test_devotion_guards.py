@@ -2,8 +2,10 @@ from endstone_arc_ai_helper.devotion_guards import (
     clamp_player_blessing,
     is_devotion_blessing_command,
     min_favor_for_effect,
+    should_block_devotion_bypass,
     validate_divine_favor_cost,
 )
+from endstone_arc_ai_helper.ai_permission import AIPermissionLevel
 
 
 def test_is_devotion_blessing_command():
@@ -36,3 +38,33 @@ def test_validate_divine_favor_cost_rejects_cheap_blessing():
     assert ok is False
     assert minimum >= 8
     assert "贪求" in msg
+
+
+def test_should_block_devotion_bypass_for_assistant():
+    blocked, msg = should_block_devotion_bypass(
+        "give Steve diamond 1",
+        AIPermissionLevel.ASSISTANT,
+        devotion_enabled=True,
+    )
+    assert blocked is True
+    assert "mc_divine_intervention" in msg
+
+
+def test_should_not_block_devotion_bypass_for_admin():
+    blocked, msg = should_block_devotion_bypass(
+        "give Steve diamond 1",
+        AIPermissionLevel.ADMIN,
+        devotion_enabled=True,
+    )
+    assert blocked is False
+    assert msg == ""
+
+
+def test_should_not_block_admin_gamemode_even_with_devotion():
+    blocked, msg = should_block_devotion_bypass(
+        "gamemode creative Steve",
+        AIPermissionLevel.ASSISTANT,
+        devotion_enabled=True,
+    )
+    assert blocked is False
+    assert msg == ""

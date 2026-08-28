@@ -28,8 +28,7 @@ from .chat_ai_manager import ChatAIManager
 from .devotion_store import DEFAULT_DEVOTION_CONFIG, DevotionStore, merge_devotion_config
 from .devotion_guards import (
     clamp_player_blessing,
-    devotion_bypass_hint,
-    is_devotion_blessing_command,
+    should_block_devotion_bypass,
     remove_items_from_player,
     validate_divine_favor_cost,
 )
@@ -648,9 +647,12 @@ class ARCAIHelperPlugin(Plugin):
             )
             return deny
 
-        # 信仰模式：凡人与管理员都不得用 mc_run_command 直接 give/effect/tp 绕过神术通道。
-        if self._is_devotion_enabled() and is_devotion_blessing_command(normalized):
-            deny = devotion_bypass_hint()
+        blocked, deny = should_block_devotion_bypass(
+            normalized,
+            level,
+            devotion_enabled=self._is_devotion_enabled(),
+        )
+        if blocked:
             self._sky_eye_log_agent_command(
                 command=normalized,
                 level=level,
@@ -2218,8 +2220,17 @@ class ARCAIHelperPlugin(Plugin):
             "称号门槛：10 初见信徒 → 100 虔信者 → 1000 神选之仆 → 10000 圣眷牧者（漫长过程）。",
             "2) 近期好感：可立即消耗的神力配额，上限 = 当前长期好感；所有神术（effect、give、tp、雷霆等）只扣近期好感。",
             "补充规则：祈祷/赞美/献祭时，先补满近期（至长期上限），剩余再以更慢速度增加长期。",
-            "近期不足时，一律不予神恩（不要 mc_run_command 绕过扣费）。",
+            "近期不足时，一律不予神恩；普通玩家/助手身份索求 tp/give/effect 等神术时，"
+            "必须用 mc_divine_intervention 并扣近期好感，禁止用 mc_run_command 绕过扣费。",
             "普通玩家（非 OP）绝无白嫖：短期不够就拒，用「贪得无厌」「不够虔诚」等话术，禁止给东西。",
+            "",
+            "【管理员通道 · 不受神灵扣费限制 · 最高优先级】",
+            "当请求者身份为管理员或代理服主（含 QQ 群 AstrBot 入口的管理员、"
+            "游戏内 OP/已提权玩家），或对方明确要求执行运维/管理任务时：",
+            "· 必须正常调用 mc_run_command、mc_jail_player、mc_economy、mc_land、"
+            "mc_arc_tp、mc_skyeye_* 等管理工具，不得因神灵模式拒绝执行；",
+            "· 管理员运维指令可直接 mc_run_command，不走 mc_divine_intervention，也不扣近期好感；",
+            "· 仅对「普通玩家/助手身份」向天星祈求的个人神恩，才走信仰扣费流程。",
             "",
             "工具流程：",
             "· mc_devotion_status — 查看长期/近期/称号",
@@ -2230,9 +2241,9 @@ class ARCAIHelperPlugin(Plugin):
             "· mc_divine_intervention — 施行神术，必须自填 favor_cost 扣近期好感；"
             "凡人效果 amplifier 最高 1（II 级），禁止 V 级；系统会校验最低消耗并拦截过低 favor_cost",
             "",
-            "【神恩节制 · 硬限制】",
-            "禁止随便给东西、禁止随手塞满级 buff。所有 give/effect/tp 必须走 mc_divine_intervention，"
-            "mc_run_command 的 give/effect/tp 在信仰模式下会被插件拦截。",
+            "【神恩节制 · 硬限制（仅普通玩家/助手身份）】",
+            "禁止随便给东西、禁止随手塞满级 buff。凡人 give/effect/tp 必须走 mc_divine_intervention；"
+            "插件会拦截非管理员身份对 mc_run_command 的 give/effect/tp 绕过。",
             "效果等级：amplifier 0=I，1=II；超过 II 直接拒绝。",
             "favor_cost 不得低于神术规模（低级效果约 8+，II 级约 23+，给钻石装备 25+）。",
             "【献祭诚意 · 必守】",
@@ -2255,8 +2266,9 @@ class ARCAIHelperPlugin(Plugin):
             "· 雷霆劈敌/大范围神迹：50～80+",
             "",
             f"禁止赐予超模物品：{forbidden_items_hint()} 等（工具会拦截）。",
-            "管理员：运维协助为主，神术可免消耗近期好感；仍须走 mc_divine_intervention，"
-            "且凡人效果等级上限（II）同样生效，禁止用 mc_run_command 白嫖 give/effect。",
+            "管理员：运维协助为主；可直接 mc_run_command 执行管理指令。"
+            "若走 mc_divine_intervention 则神术可免消耗近期好感，"
+            "但效果等级上限（II）仍对目标玩家生效。",
             "",
             "【对玩家的措辞 · 最高优先级】",
             "绝不在聊天栏向玩家透露：好感度、长期/近期、点数、数值、百分比、工具名、mc_ 指令。",
@@ -2386,8 +2398,12 @@ class ARCAIHelperPlugin(Plugin):
                 )
                 continue
 
-            if self._is_devotion_enabled() and is_devotion_blessing_command(normalized_command_line):
-                reason = devotion_bypass_hint()
+            blocked, reason = should_block_devotion_bypass(
+                normalized_command_line,
+                level,
+                devotion_enabled=self._is_devotion_enabled(),
+            )
+            if blocked:
                 if sender is not None:
                     sender.send_message(f"§c{assistant_tag} {reason}")
                 self._sky_eye_log_agent_command(

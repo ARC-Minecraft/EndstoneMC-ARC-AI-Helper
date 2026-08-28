@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .ai_permission import AIPermissionLevel
 from .player_inventory import _wealth_points_for_item, normalize_item_id
 
 _EXECUTE_BLESSING = re.compile(
@@ -26,6 +27,22 @@ _DEVOTION_BYPASS_HINT = (
 
 def devotion_bypass_hint() -> str:
     return _DEVOTION_BYPASS_HINT
+
+
+def should_block_devotion_bypass(
+    command: str,
+    level: AIPermissionLevel,
+    *,
+    devotion_enabled: bool,
+) -> tuple[bool, str]:
+    """Return whether mc_run_command should be denied as a faith bypass."""
+    if not devotion_enabled:
+        return False, ""
+    if level >= AIPermissionLevel.ADMIN:
+        return False, ""
+    if not is_devotion_blessing_command(command):
+        return False, ""
+    return True, devotion_bypass_hint()
 
 
 def is_devotion_blessing_command(command: str) -> bool:

@@ -189,9 +189,17 @@ def build_local_agent_tools(
         ),
         _fn(
             "mc_run_command",
-            "在服务器控制台执行一条 Minecraft 指令（不要带开头斜杠）。"
-            "权限受三档限制：助手仅 tp/give/effect 等；管理员大部分指令；代理服主全部。"
-            "禁止滥用 stop/kill；敏感权限指令仅代理服主。",
+            (
+                "在服务器控制台执行一条 Minecraft 指令（不要带开头斜杠）。"
+                "权限受三档限制：助手仅 tp/give/effect 等；管理员大部分指令；代理服主全部。"
+                "禁止滥用 stop/kill；敏感权限指令仅代理服主。"
+                + (
+                    " 神灵模式已启用：普通玩家/助手身份的个人神恩（give/effect/tp 等）"
+                    "须改用 mc_divine_intervention；管理员及以上身份仍可用本工具执行运维指令。"
+                    if has_devotion
+                    else ""
+                )
+            ),
             {
                 "command": {
                     "type": "string",
