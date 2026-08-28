@@ -140,29 +140,19 @@ def remove_items_from_player(
     server: Any = None,
     player_name: str = "",
 ) -> int:
-    """Remove items from inventory; fall back to /clear when API mutation fails."""
+    """Remove items via inventory API only. No /clear fallback — fail means no offering."""
+    del server, player_name  # kept for call-site compatibility
     from .player_inventory import count_item, remove_item_count
 
     requested = max(1, int(amount))
     before = count_item(player, item_id)
-    if before <= 0:
+    if before < requested:
         return 0
 
     removed = remove_item_count(player, item_id, requested)
-    if removed >= requested:
-        return removed
-
-    if server is not None and player_name:
-        need = requested - removed
-        clear_name = normalize_item_id(item_id).split(":", 1)[-1]
-        try:
-            server.dispatch_command(
-                server.command_sender,
-                f"clear {player_name} {clear_name} 0 {need}",
-            )
-        except Exception:
-            pass
-        after = count_item(player, item_id)
-        removed = max(removed, max(0, before - after))
-
-    return min(removed, requested)
+    after = count_item(player, item_id)
+    actually_gone = max(0, before - after)
+    # Trust what the inventory still shows, not the API's claimed count.
+    if actually_gone < requested:
+        return 0
+    return min(removed, actually_gone, requested)

@@ -915,17 +915,11 @@ class ARCAIHelperPlugin(Plugin):
                 "若你仍要收下，须先确认其诚意并设 allow_stingy=true。"
             )
 
-        removed = remove_items_from_player(
-            player,
-            item_id,
-            amount,
-            server=self.server,
-            player_name=real_name,
-        )
+        removed = remove_items_from_player(player, item_id, amount)
         if removed < amount:
             return (
-                f"献祭失败：无法从背包扣除足够的 {item_display_name(item_id)}"
-                f"（需要 {amount}，仅扣除 {removed}）"
+                f"献祭未成立：无法从背包扣除 {item_display_name(item_id)} x{amount}，"
+                "未收祭、不改信仰。可对玩家曰「祭品未能送达神前」；勿用 clear 强扣。"
             )
         xuid = self._player_xuid(player)
         record = self.devotion_store.get_record(xuid=xuid, name=real_name)
