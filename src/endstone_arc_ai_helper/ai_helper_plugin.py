@@ -157,10 +157,14 @@ class ARCAIHelperPlugin(Plugin):
 
         self._arc_core_newbie_guide_cache: str | None = None
         self._arc_core_landmarks_cache: str = ""
+        self._server_thread_id: int | None = None
+        self._read_tool_cache: Dict[str, tuple[float, str]] = {}
+        self._read_tool_cache_ttl = 2.0
         self._arc_core_landmarks_cache_until: float = 0.0
 
     def on_enable(self) -> None:
         self.logger.info("[ARC AI Helper] on_enable called")
+        self._server_thread_id = threading.get_ident()
         self.register_events(self)
 
         if not str(self.chat_config.get("server_name") or "").strip():
@@ -231,6 +235,8 @@ class ARCAIHelperPlugin(Plugin):
         Raises:
             TimeoutError: If the server thread does not finish in time.
         """
+        if self._server_thread_id is not None and threading.get_ident() == self._server_thread_id:
+            return func()
         result_queue: queue.Queue = queue.Queue()
 
         def _task():
@@ -247,6 +253,16 @@ class ARCAIHelperPlugin(Plugin):
         if not ok:
             raise payload
         return payload
+
+    def _cached_server_read(self, key: str, func, ttl: float | None = None) -> str:
+        now = time.time()
+        wait = self._read_tool_cache_ttl if ttl is None else float(ttl)
+        hit = self._read_tool_cache.get(key)
+        if hit and now - hit[0] < wait:
+            return hit[1]
+        text = str(self._run_on_server_thread(func) or "")
+        self._read_tool_cache[key] = (now, text)
+        return text
 
     def _resolve_permission_level(
         self,
@@ -307,11 +323,11 @@ class ARCAIHelperPlugin(Plugin):
             name = resolve_tool_action(name)
         try:
             if name == "list":
-                text = self._run_on_server_thread(self._tool_list_players)
+                text = self._cached_server_read("list", self._tool_list_players)
             elif name == "tps":
-                text = self._run_on_server_thread(self._tool_get_tps)
+                text = self._cached_server_read("tps", self._tool_get_tps, ttl=1.0)
             elif name == "info":
-                text = self._run_on_server_thread(self._tool_server_info)
+                text = self._cached_server_read("info", self._tool_server_info)
             elif name == "cmd":
                 text = self._run_on_server_thread(
                     lambda: self._tool_run_command(

@@ -1,5 +1,5 @@
 ## EndStone ARC AI Helper（弧光 Agent）
-[![Version](https://img.shields.io/badge/version-v2.3.8-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
+[![Version](https://img.shields.io/badge/version-v2.3.9-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 
@@ -196,6 +196,7 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 
 ### 更新日志
 
+- **2.3.9**：`mc_player_ip` 优先读原始 IP，避免主线程 `getnameinfo`；list/tps/info 短缓存，减少主线程往返。
 - **2.3.8**：神灵模式恢复「管理员通道」——管理员/群聊 AstrBot 入口仍可用 `mc_run_command` 等运维工具；仅普通玩家/助手身份的个人神恩禁止用 `mc_run_command` 绕过扣费。
 - **2.3.3**：神灵模式补充「玩法答疑宽松、神恩严格」；献祭前评估背包诚意，富家吝啬供奉可拒收；对玩家不暴露好感数值，用神谕隐喻。
 - **2.3.0～2.3.2**：神灵模式（`devotion.enabled`）：双轨信仰、献祭/神术工具 `mc_devotion_*` / `mc_divine_intervention`、背包操控与禁止超模物品。
