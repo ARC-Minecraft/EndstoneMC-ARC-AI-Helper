@@ -1,9 +1,9 @@
 ## EndStone ARC AI Helper（弧光 Agent）
-[![Version](https://img.shields.io/badge/version-v2.3.9-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
+[![Version](https://img.shields.io/badge/version-v2.3.10-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 
-一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.3.8**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
+一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.3.10**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
 
 支持：
 
@@ -196,6 +196,7 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 
 ### 更新日志
 
+- **2.3.10**：请求队列不再存储 `Player` 对象；worker 经 `_send_to_player` 回主线程重取在线玩家后发消息，避免 AI 排队期间玩家下线导致 purecall 崩服。
 - **2.3.9**：`mc_player_ip` 优先读原始 IP，避免主线程 `getnameinfo`；list/tps/info 短缓存，减少主线程往返。
 - **2.3.8**：神灵模式恢复「管理员通道」——管理员/群聊 AstrBot 入口仍可用 `mc_run_command` 等运维工具；仅普通玩家/助手身份的个人神恩禁止用 `mc_run_command` 绕过扣费。
 - **2.3.3**：神灵模式补充「玩法答疑宽松、神恩严格」；献祭前评估背包诚意，富家吝啬供奉可拒收；对玩家不暴露好感数值，用神谕隐喻。

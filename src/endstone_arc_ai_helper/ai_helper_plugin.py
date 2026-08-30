@@ -222,6 +222,38 @@ class ARCAIHelperPlugin(Plugin):
         name = str(getattr(player, "name", "") or "player").strip() or "player"
         return f"name_{name}"
 
+    def _resolve_online_player(self, xuid: str = "", name: str = "") -> object | None:
+        """从 online_players 重取活对象；不触碰可能已销毁的旧 Player 引用。"""
+        xuid_s = str(xuid or "").strip()
+        if xuid_s:
+            for p in self.server.online_players or []:
+                if str(getattr(p, "xuid", "")) == xuid_s:
+                    return p
+        name_s = str(name or "").strip()
+        if name_s:
+            try:
+                return self.server.get_player(name_s)
+            except Exception:
+                return None
+        return None
+
+    def _send_to_player(self, xuid: str, name: str, message: str) -> None:
+        """在工作线程安全地向仍在线玩家发消息（经主线程重取 Player）。"""
+        msg = str(message or "")
+        if not msg:
+            return
+
+        def _do_send() -> None:
+            p = self._resolve_online_player(xuid, name)
+            if p is None:
+                return
+            p.send_message(msg)
+
+        try:
+            self._run_on_server_thread(_do_send, timeout=10)
+        except Exception:
+            pass
+
     def _run_on_server_thread(self, func, timeout: float = 10):
         """Run a callable on the Endstone server thread and wait for the result.
 
@@ -2024,7 +2056,7 @@ class ARCAIHelperPlugin(Plugin):
                         self.current_request_owner = owner_name
 
                     job_type = str(job.get("type") or "")
-                    player = job.get("player")
+                    player_xuid = str(job.get("player_xuid") or "")
                     player_name = str(job.get("player_name") or "")
                     user_content = str(job.get("user_content") or "")
                     permission_level = job.get("permission_level")
@@ -2033,13 +2065,21 @@ class ARCAIHelperPlugin(Plugin):
 
                     if job_type == "public":
                         self._process_public_job(
-                            player, player_name, user_content, permission_level, is_op, channel
+                            player_xuid,
+                            player_name,
+                            user_content,
+                            permission_level,
+                            is_op,
+                            channel,
                         )
                 except Exception as error:
                     try:
-                        player = job.get("player")
                         assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
-                        player.send_message(f"§c[{assistant_name}] 处理请求出错: {error}")
+                        self._send_to_player(
+                            str(job.get("player_xuid") or ""),
+                            str(job.get("player_name") or ""),
+                            f"§c[{assistant_name}] 处理请求出错: {error}",
+                        )
                     except Exception:
                         pass
                 finally:
@@ -2070,6 +2110,7 @@ class ARCAIHelperPlugin(Plugin):
         is_op: bool,
         channel: str,
         player=None,
+        player_xuid: str = "",
     ) -> tuple[bool, str]:
         extra_system = self._build_capability_prompt()
         if permission_level is None:
@@ -2085,7 +2126,7 @@ class ARCAIHelperPlugin(Plugin):
         if self.astrbot_client.is_ready():
             return self.astrbot_client.chat(
                 player_name=player_name,
-                player_xuid=self._player_xuid(player),
+                player_xuid=player_xuid or self._player_xuid(player),
                 content=user_text,
                 is_op=is_op,
                 permission_level=level,
@@ -2115,6 +2156,10 @@ class ARCAIHelperPlugin(Plugin):
             if player is not None:
                 args["caller_player_name"] = str(getattr(player, "name", "") or "")
                 args["caller_xuid"] = self._player_xuid(player)
+            else:
+                args["caller_player_name"] = player_name
+                xuid = str(player_xuid or "").strip()
+                args["caller_xuid"] = xuid or (f"name_{player_name}" if player_name else "player")
             result = self.run_ai_tool(tool_name, args)
             if result.get("ok"):
                 return str(result.get("text") or "（无返回）")
@@ -2132,12 +2177,18 @@ class ARCAIHelperPlugin(Plugin):
         )
 
     def _process_public_job(
-        self, player, player_name: str, user_content: str, permission_level: AIPermissionLevel | int | None, is_op: bool, channel: str = "public"
+        self,
+        player_xuid: str,
+        player_name: str,
+        user_content: str,
+        permission_level: AIPermissionLevel | int | None,
+        is_op: bool,
+        channel: str = "public",
     ) -> None:
         assistant_name = str(self.chat_config.get("assistant_name") or "弧光天星")
         assistant_tag = f"[{assistant_name}]"
 
-        if player is None:
+        if not player_name:
             return
 
         with self.history_lock:
@@ -2149,17 +2200,32 @@ class ARCAIHelperPlugin(Plugin):
             permission_level,
             is_op,
             channel or "public",
-            player=player,
+            player=None,
+            player_xuid=player_xuid,
         )
         if not success:
-            player.send_message(f"§c{assistant_tag} 对话失败: {reply}")
+            self._send_to_player(
+                player_xuid,
+                player_name,
+                f"§c{assistant_tag} 对话失败: {reply}",
+            )
             return
 
         reply_text = str(reply).strip()
         if not reply_text:
             return
 
-        reply_text = self._handle_ai_reply_commands(reply_text, player)
+        def _handle_commands() -> str:
+            p = self._resolve_online_player(player_xuid, player_name)
+            if p is None:
+                return reply_text
+            return self._handle_ai_reply_commands(reply_text, p)
+
+        try:
+            reply_text = self._run_on_server_thread(_handle_commands, timeout=30)
+        except Exception:
+            reply_text = reply_text
+
         if not reply_text:
             return
 
@@ -2543,6 +2609,7 @@ class ARCAIHelperPlugin(Plugin):
             return
 
         player_name = player.name
+        player_xuid = str(getattr(player, "xuid", "") or "").strip()
         user_content = self._strip_prefix(message)
         if not user_content:
             user_content = message.strip()
@@ -2569,7 +2636,7 @@ class ARCAIHelperPlugin(Plugin):
             {
                 "type": "public",
                 "owner_name": player_name,
-                "player": player,
+                "player_xuid": player_xuid,
                 "player_name": player_name,
                 "user_content": user_content,
                 "is_op": is_op,
