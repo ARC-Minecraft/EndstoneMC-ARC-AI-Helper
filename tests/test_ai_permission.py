@@ -64,6 +64,35 @@ def test_proxy_owner_ban_allowed():
     assert ok is True
 
 
+def test_assistant_give_denied():
+    ok, err = validate_command_for_level("give Steve diamond 1", AIPermissionLevel.ASSISTANT)
+    assert ok is False
+    assert "give" in err.lower() or "管理员" in err
+
+
+def test_assistant_give_allowed_for_divine_item_grant():
+    ok, err = validate_command_for_level(
+        "give Steve diamond 1",
+        AIPermissionLevel.ASSISTANT,
+        allow_assistant_item_grant=True,
+    )
+    assert ok is True
+    assert err == ""
+
+
+def test_assistant_execute_give_denied():
+    ok, err = validate_command_for_level(
+        "execute as Steve run give Steve diamond 1",
+        AIPermissionLevel.ASSISTANT,
+    )
+    assert ok is False
+
+
+def test_admin_give_allowed():
+    ok, err = validate_command_for_level("give Steve diamond 1", AIPermissionLevel.ADMIN)
+    assert ok is True
+
+
 def test_parse_level_aliases():
     assert parse_permission_level("admin") == AIPermissionLevel.ADMIN
     assert parse_permission_level("管理员") == AIPermissionLevel.ADMIN
@@ -99,7 +128,11 @@ def test_resolve_normal_player_stays_assistant_when_ceiling_admin():
     """Config admin is AI ceiling, not requester identity."""
     level = resolve_permission_level(
         player=_FakePlayer(is_op=False),
-        chat_config={"default_permission_level": "admin"},
+        chat_config={
+            "ai_capability_level": "admin",
+            "player_permission_level": "assistant",
+            "op_permission_level": "admin",
+        },
     )
     assert level == AIPermissionLevel.ASSISTANT
 
@@ -107,7 +140,11 @@ def test_resolve_normal_player_stays_assistant_when_ceiling_admin():
 def test_resolve_op_gets_admin_when_ceiling_admin():
     level = resolve_permission_level(
         player=_FakePlayer(is_op=True),
-        chat_config={"default_permission_level": "admin"},
+        chat_config={
+            "ai_capability_level": "admin",
+            "player_permission_level": "assistant",
+            "op_permission_level": "admin",
+        },
     )
     assert level == AIPermissionLevel.ADMIN
 
@@ -115,7 +152,35 @@ def test_resolve_op_gets_admin_when_ceiling_admin():
 def test_resolve_op_clamped_by_assistant_ceiling():
     level = resolve_permission_level(
         player=_FakePlayer(is_op=True),
-        chat_config={"default_permission_level": "assistant"},
+        chat_config={
+            "ai_capability_level": "assistant",
+            "player_permission_level": "assistant",
+            "op_permission_level": "admin",
+        },
+    )
+    assert level == AIPermissionLevel.ASSISTANT
+
+
+def test_resolve_op_permission_level_config():
+    level = resolve_permission_level(
+        player=_FakePlayer(is_op=True),
+        chat_config={
+            "ai_capability_level": "proxy_owner",
+            "player_permission_level": "assistant",
+            "op_permission_level": "proxy_owner",
+        },
+    )
+    assert level == AIPermissionLevel.PROXY_OWNER
+
+
+def test_resolve_legacy_op_maps_to_admin_false():
+    level = resolve_permission_level(
+        player=_FakePlayer(is_op=True),
+        chat_config={
+            "ai_capability_level": "admin",
+            "player_permission_level": "assistant",
+            "op_maps_to_admin": False,
+        },
     )
     assert level == AIPermissionLevel.ASSISTANT
 

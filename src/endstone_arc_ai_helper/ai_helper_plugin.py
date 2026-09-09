@@ -89,11 +89,12 @@ DEFAULT_SYSTEM_PROMPT = (
     "invisibility, jump_boost, levitation, mining_fatigue, nausea, night_vision, poison, "
     "regeneration, resistance, slowness, slow_falling, speed, strength, water_breathing, "
     "weakness, wither。"
-    "禁止 stop、kill。权限分三档：助手（tp/give/effect 等）、管理员（大部分 OP 指令）、"
-    "代理服主（全部指令）。gamemode / 银行加减钱 / 领地改动等需管理员及以上；"
+    "禁止 stop、kill。权限分三档：助手（tp/effect/spawnpoint 等，不可 give）、"
+    "管理员（大部分 OP 指令，含 give）、代理服主（全部指令）。"
+    "gamemode / 银行加减钱 / 领地改动 / give 等需管理员及以上；"
     "ban/op/deop/permission 等仅代理服主。"
     "用户消息里的身份标签是请求者身份（普通玩家/助手/管理员/代理服主），"
-    "不是「天星自己的能力上限」。对普通玩家与助手身份：不要执行 gamemode、加减钱、"
+    "不是「天星自己的能力上限」。对普通玩家与助手身份：不要执行 give、gamemode、加减钱、"
     "入狱等管理操作，即使对方口头要求；应拒绝并说明需要管理员。"
 )
 
@@ -107,11 +108,11 @@ class ARCAIHelperPlugin(Plugin):
 
     permissions = {
         "arc_ai_helper.permission.assistant": {
-            "description": "弧光Agent权限：助手级别（tp/give/effect 等基础指令）",
+            "description": "弧光Agent权限：助手级别（tp/effect/spawnpoint 等，不可 give）",
             "default": True,
         },
         "arc_ai_helper.permission.admin": {
-            "description": "弧光Agent权限：管理员级别（等同 OP，不含权限/敏感指令）",
+            "description": "弧光Agent权限：管理员级别（大部分 OP 指令，含 give）",
             "default": False,
         },
         "arc_ai_helper.permission.proxy_owner": {
@@ -303,7 +304,6 @@ class ARCAIHelperPlugin(Plugin):
     ) -> AIPermissionLevel:
         """Resolve AI permission from the real online caller — never trust tool-arg claims."""
         data = payload if isinstance(payload, dict) else {}
-        op_maps = bool(self.chat_config.get("op_maps_to_admin", True))
 
         live_player = player
         if live_player is None:
@@ -315,22 +315,20 @@ class ARCAIHelperPlugin(Plugin):
                 found, _ = find_online_player(self.server, caller)
                 live_player = found
 
-        # Have a live player → identity from OP/权限节点 only.
-        # No live player → refuse elevation (default assistant); ignore forged admin in args.
+        # Have a live player → identity from player/op 配置与权限节点。
+        # No live player → refuse elevation; ignore forged admin in args.
         if live_player is not None:
             return resolve_permission_level(
                 player=live_player,
                 chat_config=self.chat_config,
                 payload_level=None,
                 payload_is_op=False,
-                op_maps_to_admin=op_maps,
             )
         return resolve_permission_level(
             player=None,
             chat_config=self.chat_config,
             payload_level=None,
             payload_is_op=False,
-            op_maps_to_admin=op_maps,
         )
 
     def run_ai_tool(self, action: str, args: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -1173,7 +1171,11 @@ class ARCAIHelperPlugin(Plugin):
             else:
                 detail = f"指令 {command}"
 
-            ok_cmd, deny = validate_command_for_level(command, level)
+            ok_cmd, deny = validate_command_for_level(
+                command,
+                level,
+                allow_assistant_item_grant=bool(item_id),
+            )
             if not ok_cmd:
                 if paid:
                     self._refund_short_favor(
@@ -1843,9 +1845,12 @@ class ARCAIHelperPlugin(Plugin):
                 "hub_token": "",
                 "server_name": "",
                 "astrbot_timeout": 180,
-                # AI capability ceiling (天星能做到哪一档)，不是每个玩家的身份。
+                # 天星能力上限（不是每个玩家的身份）。
+                "ai_capability_level": "admin",
                 "default_permission_level": "admin",
-                "op_maps_to_admin": True,
+                # 普通玩家 / OP 玩家身份档位分开配置。
+                "player_permission_level": "assistant",
+                "op_permission_level": "admin",
                 "permission_overrides": {},
                 "local_agent_max_tool_rounds": 8,
             }
@@ -1900,8 +1905,10 @@ class ARCAIHelperPlugin(Plugin):
         data.setdefault("hub_token", "")
         data.setdefault("server_name", "")
         data.setdefault("astrbot_timeout", 180)
+        data.setdefault("ai_capability_level", "admin")
         data.setdefault("default_permission_level", "admin")
-        data.setdefault("op_maps_to_admin", True)
+        data.setdefault("player_permission_level", "assistant")
+        data.setdefault("op_permission_level", "admin")
         data.setdefault("permission_overrides", {})
         data.setdefault("local_agent_max_tool_rounds", 8)
         data.setdefault("devotion", dict(DEFAULT_DEVOTION_CONFIG))
@@ -2302,8 +2309,9 @@ class ARCAIHelperPlugin(Plugin):
             "称号门槛：10 初见信徒 → 100 虔信者 → 1000 神选之仆 → 10000 圣眷牧者（漫长过程）。",
             "2) 近期好感：可立即消耗的神力配额，上限 = 当前长期好感；所有神术（effect、give、tp、雷霆等）只扣近期好感。",
             "补充规则：祈祷/赞美/献祭时，先补满近期（至长期上限），剩余再以更慢速度增加长期。",
-            "近期不足时，一律不予神恩；普通玩家/助手身份索求 tp/give/effect 等神术时，"
-            "必须用 mc_divine_intervention 并扣近期好感，禁止用 mc_run_command 绕过扣费。",
+            "近期不足时，一律不予神恩；普通玩家/助手身份索求 effect/tp 等神术时，"
+            "必须用 mc_divine_intervention 并扣近期好感，禁止用 mc_run_command 绕过扣费。"
+            "助手身份不可通过 mc_run_command 执行 give；物品神恩须用 item_id。"
             "普通玩家（非 OP）绝无白嫖：短期不够就拒，用「贪得无厌」「不够虔诚」等话术，禁止给东西。",
             "",
             "【管理员通道 · 不受神灵扣费限制 · 最高优先级】",
@@ -2324,7 +2332,8 @@ class ARCAIHelperPlugin(Plugin):
             "凡人效果 amplifier 最高 1（II 级），禁止 V 级；系统会校验最低消耗并拦截过低 favor_cost",
             "",
             "【神恩节制 · 硬限制（仅普通玩家/助手身份）】",
-            "禁止随便给东西、禁止随手塞满级 buff。凡人 give/effect/tp 必须走 mc_divine_intervention；"
+            "禁止随便给东西、禁止随手塞满级 buff。凡人 effect/tp 必须走 mc_divine_intervention；"
+            "凡人发物品须走 mc_divine_intervention + item_id（不可 mc_run_command give）。"
             "插件会拦截非管理员身份对 mc_run_command 的 give/effect/tp 绕过。",
             "效果等级：amplifier 0=I，1=II；超过 II 直接拒绝。",
             "favor_cost 不得低于神术规模（低级效果约 8+，II 级约 23+，给钻石装备 25+）。",

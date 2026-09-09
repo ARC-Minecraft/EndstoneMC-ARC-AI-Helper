@@ -7,7 +7,7 @@ from enum import IntEnum
 from typing import Any, Mapping
 
 _EXECUTE_ASSISTANT = re.compile(
-    r"\brun\s+(tp|teleport|effect|give|spawnpoint)\b",
+    r"\brun\s+(tp|teleport|effect|spawnpoint)\b",
     re.IGNORECASE,
 )
 
@@ -100,13 +100,12 @@ def _proxy_owner_only_root_in_command(normalized: str) -> str:
     return ""
 
 
-# Assistant may only use these roots (plus limited execute).
+# Assistant may only use these roots (plus limited execute). No give.
 ASSISTANT_ALLOWED_ROOTS = frozenset(
     {
         "tp",
         "teleport",
         "effect",
-        "give",
         "spawnpoint",
         "tell",
         "msg",
@@ -143,8 +142,8 @@ def resolve_ai_capability_ceiling(
 ) -> AIPermissionLevel:
     """AI capability ceiling from config (what 天星 itself is allowed to do).
 
-    ``default_permission_level`` / ``ai_capability_level`` describe the agent
-    plugin's power cap, NOT each requester's identity.
+    ``ai_capability_level`` / legacy ``default_permission_level`` describe the
+    agent plugin's power cap, NOT each requester's identity.
     """
     cfg = chat_config or {}
     raw = cfg.get("ai_capability_level")
@@ -154,18 +153,56 @@ def resolve_ai_capability_ceiling(
     return parse_permission_level(raw, AIPermissionLevel.ADMIN)
 
 
+def resolve_player_permission_level(
+    chat_config: Mapping[str, Any] | None = None,
+) -> AIPermissionLevel:
+    """Identity tier for normal (non-OP) players.
+
+    Config keys (first match wins):
+    ``player_permission_level``, ``normal_player_permission_level``.
+    Default: assistant.
+    """
+    cfg = chat_config or {}
+    raw = cfg.get("player_permission_level")
+    if raw in (None, ""):
+        raw = cfg.get("normal_player_permission_level")
+    return parse_permission_level(raw, AIPermissionLevel.ASSISTANT)
+
+
+def resolve_op_permission_level(
+    chat_config: Mapping[str, Any] | None = None,
+) -> AIPermissionLevel | None:
+    """Identity tier for OP players, or None when OP should not be elevated.
+
+    ``op_permission_level`` is preferred. Legacy ``op_maps_to_admin``:
+    true → admin, false → no OP elevation (keep player tier).
+    Default when neither set: admin.
+    """
+    cfg = chat_config or {}
+    raw = cfg.get("op_permission_level")
+    if raw not in (None, ""):
+        return parse_permission_level(raw, AIPermissionLevel.ADMIN)
+    if "op_maps_to_admin" in cfg and not bool(cfg.get("op_maps_to_admin")):
+        return None
+    return AIPermissionLevel.ADMIN
+
+
 def resolve_requester_level(
     *,
     player: Any = None,
     chat_config: Mapping[str, Any] | None = None,
     payload_level: Any = None,
     payload_is_op: bool = False,
-    op_maps_to_admin: bool = True,
+    op_maps_to_admin: bool | None = None,
     trust_payload: bool = True,
 ) -> AIPermissionLevel:
     """Resolve the caller's identity tier (never raised by capability ceiling)."""
-    cfg = chat_config or {}
-    level = AIPermissionLevel.ASSISTANT
+    cfg = dict(chat_config or {})
+    # Call-site override for legacy tests / callers that still pass the flag.
+    if op_maps_to_admin is not None and "op_permission_level" not in cfg:
+        cfg["op_maps_to_admin"] = bool(op_maps_to_admin)
+
+    level = resolve_player_permission_level(cfg)
 
     overrides = cfg.get("permission_overrides") or {}
     if isinstance(overrides, dict) and player is not None:
@@ -191,8 +228,9 @@ def resolve_requester_level(
         elif perm_api("arc_ai_helper.permission.assistant"):
             level = max(level, AIPermissionLevel.ASSISTANT)
 
-    if op_maps_to_admin and player is not None and bool(getattr(player, "is_op", False)):
-        level = max(level, AIPermissionLevel.ADMIN)
+    op_tier = resolve_op_permission_level(cfg)
+    if op_tier is not None and player is not None and bool(getattr(player, "is_op", False)):
+        level = max(level, op_tier)
 
     # Local player object wins; ignore hub echo that could self-amplify.
     if player is not None or not trust_payload:
@@ -201,8 +239,8 @@ def resolve_requester_level(
     if payload_level not in (None, ""):
         level = max(level, parse_permission_level(payload_level, AIPermissionLevel.ASSISTANT))
 
-    if payload_is_op and op_maps_to_admin:
-        level = max(level, AIPermissionLevel.ADMIN)
+    if payload_is_op and op_tier is not None:
+        level = max(level, op_tier)
 
     return level
 
@@ -213,7 +251,7 @@ def resolve_permission_level(
     chat_config: Mapping[str, Any] | None = None,
     payload_level: Any = None,
     payload_is_op: bool = False,
-    op_maps_to_admin: bool = True,
+    op_maps_to_admin: bool | None = None,
 ) -> AIPermissionLevel:
     """Effective level = min(AI capability ceiling, requester identity)."""
     ceiling = resolve_ai_capability_ceiling(chat_config)
@@ -234,8 +272,13 @@ def validate_command_for_level(
     *,
     bound_player_name: str = "",
     is_bound_self_help: bool = False,
+    allow_assistant_item_grant: bool = False,
 ) -> tuple[bool, str]:
-    """Return whether a console command is allowed for the given AI permission level."""
+    """Return whether a console command is allowed for the given AI permission level.
+
+    ``allow_assistant_item_grant``：仅神灵模式 ``mc_divine_intervention`` 的物品神恩
+    可在助手档临时放行 ``give``（须已扣近期好感）；``mc_run_command`` 不可传此标志。
+    """
     normalized = str(command or "").strip().lstrip("/").strip()
     if not normalized:
         return False, "命令为空"
@@ -258,19 +301,21 @@ def validate_command_for_level(
     if level >= AIPermissionLevel.ADMIN:
         return True, ""
 
+    if root == "give" and allow_assistant_item_grant:
+        if len(parts) >= 2 and parts[1].startswith("@"):
+            return False, "助手级别 give 不可使用 @ 选择器"
+        return True, ""
+
     if root not in ASSISTANT_ALLOWED_ROOTS:
         return False, f"助手级别不可用 /{root}，需要管理员及以上权限"
 
     if root == "execute":
         if not _EXECUTE_ASSISTANT.search(normalized):
-            return False, "execute 仅允许 tp / effect / give / spawnpoint"
+            return False, "execute 仅允许 tp / effect / spawnpoint"
         return True, ""
 
     if root == "effect" and len(parts) >= 3 and parts[2].lower() in _HARMFUL_EFFECTS:
         return False, "助手级别不允许使用负面效果"
-
-    if root == "give" and len(parts) >= 2 and parts[1].startswith("@"):
-        return False, "助手级别 give 不可使用 @ 选择器"
 
     return True, ""
 
