@@ -223,6 +223,30 @@ def test_hub_payload_proxy_owner_clamped_to_admin_ceiling():
     assert level == AIPermissionLevel.ADMIN
 
 
+def test_hub_proxy_owner_raises_above_bound_non_op_when_merged():
+    """QQ admin hub tier must not be demoted by an online bound non-OP player."""
+    live = resolve_permission_level(
+        player=_FakePlayer(is_op=False),
+        chat_config={
+            "ai_capability_level": "proxy_owner",
+            "player_permission_level": "assistant",
+            "op_permission_level": "admin",
+        },
+    )
+    hub = resolve_permission_level(
+        player=None,
+        chat_config={
+            "ai_capability_level": "proxy_owner",
+            "player_permission_level": "assistant",
+        },
+        payload_level="proxy_owner",
+    )
+    merged = AIPermissionLevel(max(int(live), int(hub)))
+    assert live == AIPermissionLevel.ASSISTANT
+    assert hub == AIPermissionLevel.PROXY_OWNER
+    assert merged == AIPermissionLevel.PROXY_OWNER
+
+
 def test_requester_override_by_name():
     level = resolve_requester_level(
         player=_FakePlayer(name="Steve"),

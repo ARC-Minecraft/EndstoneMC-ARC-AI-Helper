@@ -266,10 +266,19 @@ class AstrBotHubChatClient:
             args["caller_player_name"] = hub_player
         args.pop("permission_level", None)
         args.pop("is_op", None)
+        # Only top-level hub fields are trusted (set by AstrBot after QQ admin check).
+        hub_level = data.get("permission_level")
+        hub_is_op = bool(data.get("is_op"))
         loop = asyncio.get_running_loop()
         try:
             result = await loop.run_in_executor(
-                None, lambda: self.plugin.run_ai_tool(action, args)
+                None,
+                lambda: self.plugin.run_ai_tool(
+                    action,
+                    args,
+                    hub_permission_level=hub_level,
+                    hub_is_op=hub_is_op,
+                ),
             )
             if not isinstance(result, dict):
                 result = {"ok": False, "error": "工具返回格式异常"}

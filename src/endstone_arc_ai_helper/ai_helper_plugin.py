@@ -302,7 +302,12 @@ class ARCAIHelperPlugin(Plugin):
         player=None,
         payload: Dict[str, Any] | None = None,
     ) -> AIPermissionLevel:
-        """Resolve AI permission from the real online caller — never trust tool-arg claims."""
+        """Resolve AI permission from the live player, else hub-authenticated level.
+
+        Tool-arg ``permission_level`` / ``is_op`` are never trusted. Only
+        ``_hub_permission_level`` / ``_hub_is_op`` (set by the hub WebSocket
+        client from top-level ``ai_tool`` fields) may elevate a no-player call.
+        """
         data = payload if isinstance(payload, dict) else {}
 
         live_player = player
@@ -315,39 +320,66 @@ class ARCAIHelperPlugin(Plugin):
                 found, _ = find_online_player(self.server, caller)
                 live_player = found
 
-        # Have a live player → identity from player/op 配置与权限节点。
-        # No live player → refuse elevation; ignore forged admin in args.
+        # Live player → identity from OP / permission nodes / overrides.
+        # Hub-authenticated QQ admin must not be demoted by a bound non-OP character.
         if live_player is not None:
-            return resolve_permission_level(
+            level = resolve_permission_level(
                 player=live_player,
                 chat_config=self.chat_config,
                 payload_level=None,
                 payload_is_op=False,
             )
+            hub_level = data.get("_hub_permission_level")
+            if hub_level not in (None, ""):
+                hub_resolved = resolve_permission_level(
+                    player=None,
+                    chat_config=self.chat_config,
+                    payload_level=hub_level,
+                    payload_is_op=bool(data.get("_hub_is_op")),
+                )
+                return AIPermissionLevel(max(int(level), int(hub_resolved)))
+            return level
+        # QQ / external hub tools: trust hub root fields only.
         return resolve_permission_level(
             player=None,
             chat_config=self.chat_config,
-            payload_level=None,
-            payload_is_op=False,
+            payload_level=data.get("_hub_permission_level"),
+            payload_is_op=bool(data.get("_hub_is_op")),
         )
 
-    def run_ai_tool(self, action: str, args: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def run_ai_tool(
+        self,
+        action: str,
+        args: Dict[str, Any] | None = None,
+        *,
+        hub_permission_level: Any = None,
+        hub_is_op: bool = False,
+    ) -> Dict[str, Any]:
         """Execute an AstrBot MC control tool on the game server.
 
         Args:
             action: ``list`` / ``tps`` / ``info`` / ``cmd`` / ``jail`` / ``release`` / ``prisoners`` /
                 ``skyeye_*`` / ``economy`` / ``land`` / ``arc_tp`` / ``stock_leaderboard`` / ``stock_quote``.
-            args: Extra arguments, including ``command`` / ``is_op`` / ``permission_level``.
+            args: Extra arguments. ``permission_level`` / ``is_op`` inside args are ignored.
+            hub_permission_level: Hub-authenticated tier from the WebSocket root
+                (not model args). Used when no live player is available.
+            hub_is_op: Hub-authenticated OP flag from the WebSocket root.
 
         Returns:
             JSON-serializable dict with ``ok`` and ``text`` or ``error``.
         """
         payload = args if isinstance(args, dict) else {}
-        # Hub/模型可能伪造 permission_level；一律剔除，改由 _resolve_permission_level 按真人解析。
+        # Model/args may forge permission_level; strip and only keep hub-trusted fields.
         if isinstance(payload, dict):
             payload = dict(payload)
             payload.pop("permission_level", None)
             payload.pop("is_op", None)
+            payload.pop("_hub_permission_level", None)
+            payload.pop("_hub_is_op", None)
+            if hub_permission_level not in (None, ""):
+                payload["_hub_permission_level"] = hub_permission_level
+            if hub_is_op:
+                payload["_hub_is_op"] = True
         name = str(action or "").strip().lower()
         if name.startswith("mc_"):
             name = resolve_tool_action(name)
@@ -2158,8 +2190,8 @@ class ARCAIHelperPlugin(Plugin):
         def _execute_local_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
             args = dict(tool_args or {})
             # 强制覆盖：模型不得在参数里自报 admin / is_op 来绕过信仰扣费。
-            args["is_op"] = is_admin
-            args["permission_level"] = level_value
+            args.pop("is_op", None)
+            args.pop("permission_level", None)
             if player is not None:
                 args["caller_player_name"] = str(getattr(player, "name", "") or "")
                 args["caller_xuid"] = self._player_xuid(player)
@@ -2167,7 +2199,12 @@ class ARCAIHelperPlugin(Plugin):
                 args["caller_player_name"] = player_name
                 xuid = str(player_xuid or "").strip()
                 args["caller_xuid"] = xuid or (f"name_{player_name}" if player_name else "player")
-            result = self.run_ai_tool(tool_name, args)
+            result = self.run_ai_tool(
+                tool_name,
+                args,
+                hub_permission_level=level_value,
+                hub_is_op=is_admin,
+            )
             if result.get("ok"):
                 return str(result.get("text") or "（无返回）")
             return str(result.get("error") or "工具执行失败")
