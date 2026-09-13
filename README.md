@@ -1,9 +1,9 @@
 ## EndStone ARC AI Helper（弧光 Agent）
-[![Version](https://img.shields.io/badge/version-v2.3.11-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
+[![Version](https://img.shields.io/badge/version-v2.3.12-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 
-一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.3.11**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
+一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.3.12**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
 
 支持：
 
@@ -207,6 +207,7 @@ OpenAI 兼容 Provider 列表。模型需支持 **tools / function calling**（�
 
 ### 更新日志
 
+- **2.3.12**：修复公屏回复跨线程发包——`_process_public_job` 的 `broadcast_message` 切回主线程执行（此前在工作线程直接广播，触发 `PacketSendEvent must be triggered synchronously from server thread`，反复出现后可致服务端死锁）。
 - **2.3.11**：权限配置拆分——`player_permission_level`（普通玩家）与 `op_permission_level`（OP）分开写；助手档移除 `give`（仅管理员可 `mc_run_command` 给物品；神灵模式仍可用 `mc_divine_intervention` + `item_id`）。
 - **2.3.10**：请求队列不再存储 `Player` 对象；worker 经 `_send_to_player` 回主线程重取在线玩家后发消息，避免 AI 排队期间玩家下线导致 purecall 崩服。
 - **2.3.9**：`mc_player_ip` 优先读原始 IP，避免主线程 `getnameinfo`；list/tps/info 短缓存，减少主线程往返。

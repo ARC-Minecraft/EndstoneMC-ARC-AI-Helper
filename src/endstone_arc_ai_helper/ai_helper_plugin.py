@@ -2240,7 +2240,16 @@ class ARCAIHelperPlugin(Plugin):
             self._append_public_history_unlocked(assistant_name, "assistant", reply_text)
 
         header = self._format_assistant_header()
-        self.server.broadcast_message(f"{header}\n{reply_text}")
+        broadcast_text = f"{header}\n{reply_text}"
+
+        def _broadcast() -> None:
+            self.server.broadcast_message(broadcast_text)
+
+        # broadcast 属于发包，必须回主线程执行，否则触发 PacketSendEvent 跨线程错误并可能锁死服务端。
+        try:
+            self._run_on_server_thread(_broadcast, timeout=10)
+        except Exception as error:
+            self.logger.warning(f"[ARC AI Helper] 公屏回复广播失败: {error}")
         # 不把普通回复写入天眼，避免淹没真正的指令/改动记录。
 
     def _get_arc_core_newbie_guide_text(self) -> str:
