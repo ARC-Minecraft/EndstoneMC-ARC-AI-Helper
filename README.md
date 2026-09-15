@@ -1,6 +1,6 @@
 ## EndStone ARC AI Helper（弧光 Agent）
-[![Version](https://img.shields.io/badge/version-v2.3.12-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper)
-[![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Minecraft/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+[![Version](https://img.shields.io/badge/version-v2.3.12-blue)](https://github.com/ARC-Game-Club/EndstoneMC-ARC-AI-Helper)
+[![Codacy Grade](https://app.codacy.com/project/badge/Grade/55ab81f1c00342de889d1d6376ea18f0)](https://app.codacy.com/gh/ARC-Game-Club/EndstoneMC-ARC-AI-Helper/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 
 
 一个为 Endstone 服务器提供 **弧光 Agent** 的插件（当前 **v2.3.12**）。AI 已从「聊天助手」升级为可操作本服的 **Agent**：查服、执行指令、银行/领地/传送/天眼/监狱等均可工具化调用。
@@ -74,7 +74,7 @@
 3. 连接成功后日志会出现：`对话走 AstrBot 人格/记忆`。
 4. 中枢连不上或版本过旧时，自动退回本机 `persona.txt` + `providers.json` **Agent 工具循环**。
 
-**仅本服运行、不接 AstrBot**：只要配好 `providers.json`（OpenAI 兼容 `/chat/completions`，且模型支持 function calling），即可使用下表工具。完整参数表亦见 [AstrBot-ARC-EndStoneMC-Hub README](https://github.com/ARC-Minecraft/AstrBot-ARC-EndStoneMC-Hub#mc-ai-工具参数一览)。
+**仅本服运行、不接 AstrBot**：只要配好 `providers.json`（OpenAI 兼容 `/chat/completions`，且模型支持 function calling），即可使用下表工具。完整参数表亦见 [AstrBot-ARC-EndStoneMC-Hub README](https://github.com/ARC-Game-Club/AstrBot-ARC-EndStoneMC-Hub#mc-ai-工具参数一览)。
 
 | 工具 | 权限 | 参数 | 必填 | 默认 | 含义 |
 |------|------|------|------|------|------|

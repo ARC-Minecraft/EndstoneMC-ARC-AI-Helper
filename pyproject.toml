@@ -15,7 +15,7 @@ license = { file = "LICENSE" }
 keywords = ["endstone", "plugin", "ai", "agent", "assistant", "chat", "openai"]
 
 [project.urls]
-Homepage = "https://github.com/ARC-Minecraft/EndstoneMC-ARC-AI-Helper"
+Homepage = "https://github.com/ARC-Game-Club/EndstoneMC-ARC-AI-Helper"
 
 [project.entry-points."endstone"]
 arc_ai_helper = "endstone_arc_ai_helper.ai_helper_plugin:ARCAIHelperPlugin"
